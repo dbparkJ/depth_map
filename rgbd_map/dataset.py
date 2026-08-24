@@ -33,6 +33,7 @@ class FrameRecord:
     monotonic_ns: int
     rgb_path: Path
     depth_path: Path
+    confidence_path: Path | None = None
 
 
 @dataclass(frozen=True)
@@ -112,6 +113,7 @@ class RgbdGpsDataset:
                     break
                 rgb = row.get("rgb_file") or ""
                 depth = row.get("depth_file") or ""
+                confidence = (row.get("confidence_file") or "").strip()
                 if not rgb or not depth:
                     continue
                 frames.append(
@@ -122,6 +124,9 @@ class RgbdGpsDataset:
                         monotonic_ns=int(row["frame_host_monotonic_ns"]),
                         rgb_path=self._resolve_data_path(rgb),
                         depth_path=self._resolve_data_path(depth),
+                        confidence_path=(
+                            self._resolve_data_path(confidence) if confidence else None
+                        ),
                     )
                 )
         if len(frames) < 2:
@@ -198,4 +203,3 @@ class RgbdGpsDataset:
             fix_quality_name=names,
             hdop=hdop,
         )
-

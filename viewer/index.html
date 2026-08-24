@@ -33,18 +33,34 @@
 
     <section class="summary-grid">
       <div><span>프레임</span><strong id="frameCount">-</strong></div>
-      <div><span>점 개수</span><strong id="pointCount">-</strong></div>
+      <div><span>Raw PLY 점 수</span><strong id="rawPointCount">-</strong></div>
+      <div><span>Clean PLY 점 수</span><strong id="cleanPointCount">-</strong></div>
+      <div><span>제거 점 수</span><strong id="removedPointCount">-</strong></div>
+      <div><span>제거율</span><strong id="removalRatio">-</strong></div>
+      <div><span>웹 Clean 점 수</span><strong id="webCleanPointCount">-</strong></div>
       <div><span>VO 성공</span><strong id="voRate">-</strong></div>
       <div><span>GPS 제약 잔차 p95</span><strong id="residualP95">-</strong></div>
     </section>
 
     <section>
       <h2>표시 레이어</h2>
-      <label class="toggle"><input id="showCloud" type="checkbox" checked><span>컬러 점군</span></label>
+      <label class="toggle"><input id="showCleanCloud" type="checkbox" checked><span class="swatch clean"></span><span>정제 점군</span></label>
+      <label class="toggle"><input id="showRawCloud" type="checkbox"><span class="swatch raw-cloud"></span><span>원본 점군</span></label>
+      <label class="toggle"><input id="showRemovedCloud" type="checkbox"><span class="swatch removed"></span><span>제거된 점</span></label>
       <label class="toggle"><input id="showFused" type="checkbox" checked><span class="swatch cyan"></span><span>RGB-D+GPS 궤적</span></label>
       <label class="toggle"><input id="showGps" type="checkbox" checked><span class="swatch red"></span><span>보간 GPS 궤적</span></label>
       <label class="toggle"><input id="showRaw" type="checkbox"><span class="swatch amber"></span><span>그래프 전 GPS 보조 VO</span></label>
       <label class="toggle"><input id="showResiduals" type="checkbox"><span class="swatch white"></span><span>GPS 제약 잔차 벡터</span></label>
+      <div id="removedLegend" class="reason-legend" hidden>
+        <strong>제거 사유 색상</strong>
+        <span><i class="reason below"></i>Local surface 아래</span>
+        <span><i class="reason radius"></i>Radius 고립점</span>
+        <span><i class="reason statistical"></i>Statistical outlier</span>
+        <span><i class="reason spread"></i>위치 분산</span>
+        <span><i class="reason support"></i>낮은 다중 프레임 지지</span>
+        <span><i class="reason bright"></i>밝은 저신뢰</span>
+        <span><i class="reason invalid"></i>비유한 값·범위 오류</span>
+      </div>
     </section>
 
     <section>
@@ -52,7 +68,7 @@
       <label class="control">동쪽 이동 <output id="eastValue">0.0 m</output><input id="eastOffset" type="range" min="-20" max="20" step="0.1" value="0"></label>
       <label class="control">북쪽 이동 <output id="northValue">0.0 m</output><input id="northOffset" type="range" min="-20" max="20" step="0.1" value="0"></label>
       <label class="control">높이 이동 <output id="upValue">0.0 m</output><input id="upOffset" type="range" min="-40" max="40" step="0.1" value="0"></label>
-      <label class="control">점 크기 <output id="pointSizeValue">2.0 px</output><input id="pointSize" type="range" min="1" max="6" step="0.5" value="2"></label>
+      <label class="control">점 크기 <output id="pointSizeValue">2.5 px</output><input id="pointSize" type="range" min="1" max="6" step="0.5" value="2.5"></label>
       <div class="button-row"><button id="resetOffsets">오프셋 초기화</button><button id="flyToData">전체 보기</button></div>
     </section>
 

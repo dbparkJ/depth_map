@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import csv
 import json
+import os
 import shutil
 import struct
+from dataclasses import asdict
 from pathlib import Path
 
 import numpy as np
@@ -11,17 +13,107 @@ import numpy as np
 from .dataset import FrameRecord, InterpolatedGps
 from .geodesy import LocalENU
 from .odometry import OdometryResult
-from .pointcloud import PointCloudResult
+from .pointcloud import PointCloudResult, spatially_sample_indices
 from .trajectory import TrajectoryResult
 
 
+_WRITE_CHUNK_POINTS = 250_000
+_BROWSER_POINT_DTYPE = np.dtype(
+    [
+        ("x", "<f4"),
+        ("y", "<f4"),
+        ("z", "<f4"),
+        ("r", "u1"),
+        ("g", "u1"),
+        ("b", "u1"),
+        ("a", "u1"),
+    ]
+)
+_PLY_POINT_DTYPE = np.dtype(
+    [
+        ("x", "<f4"),
+        ("y", "<f4"),
+        ("z", "<f4"),
+        ("r", "u1"),
+        ("g", "u1"),
+        ("b", "u1"),
+    ]
+)
+
+
 def _json_dump(path: Path, value: object) -> None:
-    with path.open("w", encoding="utf-8") as handle:
+    temporary = path.with_name(f"{path.name}.tmp")
+    with temporary.open("w", encoding="utf-8") as handle:
         json.dump(value, handle, ensure_ascii=False, indent=2, allow_nan=False)
+        handle.flush()
+        os.fsync(handle.fileno())
+    temporary.replace(path)
 
 
 def _float_list(points: np.ndarray, decimals: int = 4) -> list[list[float]]:
     return np.round(points.astype(np.float64), decimals=decimals).tolist()
+
+
+def _point_color_arrays(
+    cloud_or_points: PointCloudResult | np.ndarray,
+    colors_rgb: np.ndarray | None = None,
+) -> tuple[np.ndarray, np.ndarray]:
+    if isinstance(cloud_or_points, PointCloudResult):
+        if colors_rgb is not None:
+            raise ValueError("colors_rgb must be omitted for PointCloudResult input")
+        points = np.asarray(cloud_or_points.points_enu_m)
+        colors = np.asarray(cloud_or_points.colors_rgb)
+    else:
+        points = np.asarray(cloud_or_points)
+        if colors_rgb is None:
+            raise ValueError("colors_rgb is required for point-array input")
+        colors = np.asarray(colors_rgb)
+    if points.ndim != 2 or points.shape[1:] != (3,):
+        raise ValueError("points must have shape (N, 3)")
+    if colors.shape != points.shape:
+        raise ValueError("colors_rgb must have shape (N, 3)")
+    return points, colors
+
+
+def write_browser_points_arrays(
+    path: Path,
+    points_enu_m: np.ndarray,
+    colors_rgb: np.ndarray,
+    max_points: int | None = None,
+) -> int:
+    points_all, colors_all = _point_color_arrays(points_enu_m, colors_rgb)
+    total = len(points_all)
+    if max_points is not None and max_points <= 0:
+        raise ValueError("max_points must be positive when specified")
+    keep = (
+        spatially_sample_indices(points_all, max_points)
+        if max_points is not None and total > max_points
+        else None
+    )
+    count = total if keep is None else len(keep)
+    temporary = path.with_name(f"{path.name}.tmp")
+    with temporary.open("wb") as handle:
+        handle.write(
+            struct.pack("<4sIII", b"RGBD", 1, count, _BROWSER_POINT_DTYPE.itemsize)
+        )
+        for begin in range(0, count, _WRITE_CHUNK_POINTS):
+            end = min(begin + _WRITE_CHUNK_POINTS, count)
+            source = slice(begin, end) if keep is None else keep[begin:end]
+            points = points_all[source]
+            colors = colors_all[source]
+            records = np.empty(end - begin, dtype=_BROWSER_POINT_DTYPE)
+            records["x"] = points[:, 0]
+            records["y"] = points[:, 1]
+            records["z"] = points[:, 2]
+            records["r"] = colors[:, 0]
+            records["g"] = colors[:, 1]
+            records["b"] = colors[:, 2]
+            records["a"] = 255
+            records.tofile(handle)
+        handle.flush()
+        os.fsync(handle.fileno())
+    temporary.replace(path)
+    return count
 
 
 def write_browser_points(
@@ -29,78 +121,144 @@ def write_browser_points(
     cloud: PointCloudResult,
     max_points: int | None = None,
 ) -> int:
-    total = len(cloud.points_enu_m)
-    if max_points is not None and total > max_points:
-        keep = np.linspace(0, total - 1, max_points, dtype=np.int64)
-        points = cloud.points_enu_m[keep]
-        colors = cloud.colors_rgb[keep]
-    else:
-        points = cloud.points_enu_m
-        colors = cloud.colors_rgb
-    count = len(points)
-    records = np.empty(
-        count,
-        dtype=np.dtype(
-            [
-                ("x", "<f4"),
-                ("y", "<f4"),
-                ("z", "<f4"),
-                ("r", "u1"),
-                ("g", "u1"),
-                ("b", "u1"),
-                ("a", "u1"),
-            ]
-        ),
+    return write_browser_points_arrays(
+        path,
+        cloud.points_enu_m,
+        cloud.colors_rgb,
+        max_points,
     )
-    records["x"] = points[:, 0]
-    records["y"] = points[:, 1]
-    records["z"] = points[:, 2]
-    records["r"] = colors[:, 0]
-    records["g"] = colors[:, 1]
-    records["b"] = colors[:, 2]
-    records["a"] = 255
-    with path.open("wb") as handle:
-        handle.write(struct.pack("<4sIII", b"RGBD", 1, count, records.dtype.itemsize))
-        records.tofile(handle)
-    return count
 
 
-def write_ply(path: Path, cloud: PointCloudResult, origin: LocalENU) -> None:
-    count = len(cloud.points_enu_m)
+def write_ply(
+    path: Path,
+    cloud_or_points: PointCloudResult | np.ndarray,
+    colors_or_origin: np.ndarray | LocalENU,
+    origin: LocalENU | None = None,
+    comments: dict[str, object] | None = None,
+) -> None:
+    if isinstance(cloud_or_points, PointCloudResult):
+        if not isinstance(colors_or_origin, LocalENU) or origin is not None:
+            raise ValueError("PointCloudResult form is write_ply(path, cloud, origin)")
+        points, colors = _point_color_arrays(cloud_or_points)
+        resolved_origin = colors_or_origin
+    else:
+        if origin is None or isinstance(colors_or_origin, LocalENU):
+            raise ValueError(
+                "array form is write_ply(path, points, colors, origin, comments)"
+            )
+        points, colors = _point_color_arrays(cloud_or_points, colors_or_origin)
+        resolved_origin = origin
+    count = len(points)
+    extra_comments = "".join(
+        f"comment {key} {value}\n" for key, value in (comments or {}).items()
+    )
     header = (
         "ply\n"
         "format binary_little_endian 1.0\n"
         f"comment coordinate_system local_ENU\n"
-        f"comment origin_lon_deg {origin.origin_longitude_deg:.12f}\n"
-        f"comment origin_lat_deg {origin.origin_latitude_deg:.12f}\n"
-        f"comment origin_ellipsoid_height_m {origin.origin_ellipsoid_height_m:.4f}\n"
+        f"comment origin_lon_deg {resolved_origin.origin_longitude_deg:.12f}\n"
+        f"comment origin_lat_deg {resolved_origin.origin_latitude_deg:.12f}\n"
+        f"comment origin_ellipsoid_height_m {resolved_origin.origin_ellipsoid_height_m:.4f}\n"
+        f"{extra_comments}"
         f"element vertex {count}\n"
         "property float x\nproperty float y\nproperty float z\n"
         "property uchar red\nproperty uchar green\nproperty uchar blue\n"
         "end_header\n"
     ).encode("ascii")
-    records = np.empty(
-        count,
-        dtype=np.dtype(
-            [
-                ("x", "<f4"),
-                ("y", "<f4"),
-                ("z", "<f4"),
-                ("r", "u1"),
-                ("g", "u1"),
-                ("b", "u1"),
-            ]
-        ),
-    )
-    records["x"] = cloud.points_enu_m[:, 0]
-    records["y"] = cloud.points_enu_m[:, 1]
-    records["z"] = cloud.points_enu_m[:, 2]
-    records["r"] = cloud.colors_rgb[:, 0]
-    records["g"] = cloud.colors_rgb[:, 1]
-    records["b"] = cloud.colors_rgb[:, 2]
-    with path.open("wb") as handle:
+    temporary = path.with_name(f"{path.name}.tmp")
+    with temporary.open("wb") as handle:
         handle.write(header)
-        records.tofile(handle)
+        for begin in range(0, count, _WRITE_CHUNK_POINTS):
+            end = min(begin + _WRITE_CHUNK_POINTS, count)
+            point_chunk = points[begin:end]
+            color_chunk = colors[begin:end]
+            records = np.empty(end - begin, dtype=_PLY_POINT_DTYPE)
+            records["x"] = point_chunk[:, 0]
+            records["y"] = point_chunk[:, 1]
+            records["z"] = point_chunk[:, 2]
+            records["r"] = color_chunk[:, 0]
+            records["g"] = color_chunk[:, 1]
+            records["b"] = color_chunk[:, 2]
+            records.tofile(handle)
+        handle.flush()
+        os.fsync(handle.fileno())
+    temporary.replace(path)
+
+
+def read_ply(path: Path) -> tuple[np.ndarray, np.ndarray, dict[str, str]]:
+    """Read the binary local-ENU PLY layout written by :func:`write_ply`."""
+
+    header_lines: list[str] = []
+    with path.open("rb") as handle:
+        while True:
+            line = handle.readline()
+            if not line:
+                raise ValueError(f"PLY header is incomplete: {path}")
+            try:
+                decoded = line.decode("ascii").rstrip("\n")
+            except UnicodeDecodeError as exc:
+                raise ValueError(f"PLY header is not ASCII: {path}") from exc
+            header_lines.append(decoded)
+            if decoded == "end_header":
+                body_offset = handle.tell()
+                break
+    if not header_lines or header_lines[0] != "ply":
+        raise ValueError(f"Not a PLY file: {path}")
+    if "format binary_little_endian 1.0" not in header_lines:
+        raise ValueError("Only binary_little_endian PLY version 1.0 is supported")
+    count_lines = [line for line in header_lines if line.startswith("element vertex ")]
+    if len(count_lines) != 1:
+        raise ValueError("PLY must contain one vertex element")
+    count = int(count_lines[0].split()[-1])
+    expected_properties = [
+        "property float x",
+        "property float y",
+        "property float z",
+        "property uchar red",
+        "property uchar green",
+        "property uchar blue",
+    ]
+    for property_line in expected_properties:
+        if property_line not in header_lines:
+            raise ValueError(f"PLY is missing {property_line!r}")
+    expected_size = body_offset + count * _PLY_POINT_DTYPE.itemsize
+    if path.stat().st_size != expected_size:
+        raise ValueError(
+            f"PLY size mismatch: expected {expected_size}, got {path.stat().st_size}"
+        )
+    if count == 0:
+        comments: dict[str, str] = {}
+        for line in header_lines:
+            if line.startswith("comment "):
+                pieces = line.split(maxsplit=2)
+                if len(pieces) == 3:
+                    comments[pieces[1]] = pieces[2]
+        return (
+            np.empty((0, 3), dtype=np.float32),
+            np.empty((0, 3), dtype=np.uint8),
+            comments,
+        )
+    records = np.memmap(
+        path,
+        mode="r",
+        dtype=_PLY_POINT_DTYPE,
+        offset=body_offset,
+        shape=(count,),
+    )
+    points = np.empty((count, 3), dtype=np.float32)
+    colors = np.empty((count, 3), dtype=np.uint8)
+    for axis, name in enumerate(("x", "y", "z")):
+        points[:, axis] = records[name]
+    for axis, name in enumerate(("r", "g", "b")):
+        colors[:, axis] = records[name]
+    comments: dict[str, str] = {}
+    for line in header_lines:
+        if line.startswith("comment "):
+            pieces = line.split(maxsplit=2)
+            if len(pieces) == 3:
+                comments[pieces[1]] = pieces[2]
+    del records
+    return points, colors, comments
 
 
 def write_trajectory_files(
@@ -277,6 +435,60 @@ def write_odometry_diagnostics(
             )
 
 
+def _cloud_build_stats_summary(cloud: PointCloudResult) -> dict[str, int]:
+    stats = getattr(cloud, "stats", None)
+    if stats is not None:
+        result = {key: int(value) for key, value in asdict(stats).items()}
+    else:
+        # Compatibility for PointCloudResult objects created with the pre-statistics API.
+        ply_count = len(cloud.points_enu_m)
+        valid_count = int(cloud.valid_depth_sample_count)
+        result = {
+            "total_frame_count": int(cloud.sampled_frame_count),
+            "sampled_frame_count": int(cloud.sampled_frame_count),
+            "decoded_frame_count": int(cloud.decoded_frame_count),
+            "candidate_pixel_sample_count": valid_count,
+            "valid_depth_sample_count": valid_count,
+            "invalid_depth_sample_count": 0,
+            "discarded_by_per_frame_cap": 0,
+            "points_before_voxel": valid_count,
+            "unique_voxel_count": ply_count,
+            "discarded_by_voxel": max(0, valid_count - ply_count),
+            "points_before_final_cap": ply_count,
+            "discarded_by_final_cap": 0,
+        }
+    result["valid_depth_sample_count_before_voxel"] = result[
+        "valid_depth_sample_count"
+    ]
+    result["unique_voxel_count_before_final_cap"] = result["unique_voxel_count"]
+    return result
+
+
+def cloud_build_stats_summary(cloud: PointCloudResult) -> dict[str, int]:
+    """Return the build-stage fields used by legacy and postprocessed summaries."""
+
+    return _cloud_build_stats_summary(cloud)
+
+
+def _cloud_summary(
+    cloud: PointCloudResult,
+    browser_point_count: int,
+) -> dict[str, object]:
+    ply_point_count = len(cloud.points_enu_m)
+    summary: dict[str, object] = {
+        "point_count": int(ply_point_count),
+        "ply_point_count": int(ply_point_count),
+        "browser_point_count": int(browser_point_count),
+        **_cloud_build_stats_summary(cloud),
+        "browser_binary": "points.bin",
+        "ply": "cloud_enu.ply",
+    }
+    if ply_point_count:
+        summary["bbox_enu_min_m"] = np.min(cloud.points_enu_m, axis=0).tolist()
+        summary["bbox_enu_max_m"] = np.max(cloud.points_enu_m, axis=0).tolist()
+    return summary
+
+
 def export_mapping(
     output_dir: Path,
     viewer_source_dir: Path,
@@ -288,37 +500,35 @@ def export_mapping(
     cloud: PointCloudResult | None,
     browser_max_points: int,
     parameters: dict,
+    *,
+    cloud_summary_override: dict[str, object] | None = None,
+    write_support_files: bool = True,
 ) -> dict:
     output_dir.mkdir(parents=True, exist_ok=True)
     data_dir = output_dir / "data"
     data_dir.mkdir(parents=True, exist_ok=True)
-    write_trajectory_files(data_dir, frames, gps, origin, trajectory)
-    write_odometry_diagnostics(
-        data_dir / "odometry.csv", frames, gps, trajectory, odometry
-    )
+    if write_support_files:
+        write_trajectory_files(data_dir, frames, gps, origin, trajectory)
+        write_odometry_diagnostics(
+            data_dir / "odometry.csv", frames, gps, trajectory, odometry
+        )
 
     cloud_summary: dict[str, object]
-    if cloud is not None:
+    if cloud_summary_override is not None:
+        cloud_summary = dict(cloud_summary_override)
+    elif cloud is not None:
         browser_point_count = write_browser_points(
             data_dir / "points.bin", cloud, browser_max_points
         )
         write_ply(data_dir / "cloud_enu.ply", cloud, origin)
-        minimum = np.min(cloud.points_enu_m, axis=0)
-        maximum = np.max(cloud.points_enu_m, axis=0)
-        cloud_summary = {
-            "point_count": int(browser_point_count),
-            "browser_point_count": int(browser_point_count),
-            "ply_point_count": int(len(cloud.points_enu_m)),
-            "sampled_frame_count": int(cloud.sampled_frame_count),
-            "decoded_frame_count": int(cloud.decoded_frame_count),
-            "valid_depth_sample_count_before_voxel": int(cloud.valid_depth_sample_count),
-            "bbox_enu_min_m": minimum.tolist(),
-            "bbox_enu_max_m": maximum.tolist(),
-            "browser_binary": "points.bin",
-            "ply": "cloud_enu.ply",
-        }
+        cloud_summary = _cloud_summary(cloud, browser_point_count)
     else:
-        cloud_summary = {"point_count": 0, "trajectory_only": True}
+        cloud_summary = {
+            "point_count": 0,
+            "ply_point_count": 0,
+            "browser_point_count": 0,
+            "trajectory_only": True,
+        }
 
     summary = {
         "format_version": 1,

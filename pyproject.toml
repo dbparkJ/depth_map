@@ -17,10 +17,11 @@ dependencies = [
 
 [project.optional-dependencies]
 test = ["pytest>=8"]
+postprocess = ["open3d>=0.19"]
 
 [project.scripts]
 rgbd-gps-map = "rgbd_map.cli:main"
+rgbd-pointcloud-postprocess = "rgbd_map.postprocess_cli:main"
 
 [tool.setuptools.packages.find]
 include = ["rgbd_map*"]
-

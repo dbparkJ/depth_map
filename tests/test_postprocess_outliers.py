@@ -220,3 +220,7 @@ def test_pdal_smrf_skips_elm_noise_classification(tmp_path):
         stage for stage in pipeline["pipeline"] if stage["type"] == "filters.smrf"
     )
     assert smrf_stage["where"] == "!(Classification == 7)"
+    writer_stage = next(
+        stage for stage in pipeline["pipeline"] if stage["type"] == "writers.ply"
+    )
+    assert writer_stage["storage_mode"] == "little endian"

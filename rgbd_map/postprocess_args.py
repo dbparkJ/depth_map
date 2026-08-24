@@ -11,6 +11,8 @@ class PostprocessOutputOptions:
     keep_raw_cloud: bool
     save_removed_cloud: bool
     write_diagnostics: bool
+    write_debug_stages: bool
+    debug_stage_max_points: int
     auto_fallback: bool
 
 
@@ -53,6 +55,21 @@ def add_postprocess_arguments(parser: argparse.ArgumentParser) -> None:
         help="Write top/side/reason diagnostic images and tile summaries",
     )
     group.add_argument(
+        "--write-debug-stages",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help=(
+            "Write capped survivor/removal samples and fixed-view diagnostics for "
+            "every 3-D cleanup stage (default: disabled)"
+        ),
+    )
+    group.add_argument(
+        "--debug-stage-max-points",
+        type=int,
+        default=500_000,
+        help="Maximum survivor and newly-removed sample points per debug stage",
+    )
+    group.add_argument(
         "--auto-postprocess-fallback",
         action=argparse.BooleanOptionalAction,
         default=True,
@@ -86,9 +103,15 @@ def resolve_output_options(
     # Raw preservation is the safe default for every preset. Removed products and
     # diagnostics default on whenever a postprocess stage is enabled; road-map is
     # therefore fully enabled without extra flags as required by the CLI contract.
+    debug_stage_max_points = int(getattr(args, "debug_stage_max_points", 500_000))
+    if debug_stage_max_points <= 0:
+        raise ValueError("--debug-stage-max-points must be positive")
+
     return PostprocessOutputOptions(
         keep_raw_cloud=selected("keep_raw_cloud", True),
         save_removed_cloud=selected("save_removed_cloud", config.enabled),
         write_diagnostics=selected("write_postprocess_diagnostics", config.enabled),
+        write_debug_stages=bool(getattr(args, "write_debug_stages", False)),
+        debug_stage_max_points=debug_stage_max_points,
         auto_fallback=bool(getattr(args, "auto_postprocess_fallback", True)),
     )

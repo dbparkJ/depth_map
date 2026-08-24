@@ -163,6 +163,24 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--pose-mode", choices=("hybrid", "gps"), default="hybrid")
     parser.add_argument("--start-frame", type=int, default=0)
     parser.add_argument("--max-frames", type=int, default=None)
+    parser.add_argument(
+        "--chunk-duration-seconds",
+        type=float,
+        default=None,
+        help=(
+            "Select a half-open timestamp chunk of this duration instead of "
+            "--start-frame/--max-frames"
+        ),
+    )
+    parser.add_argument(
+        "--chunk-index",
+        type=int,
+        default=None,
+        help=(
+            "Zero-based timestamp chunk index (default: 0 when "
+            "--chunk-duration-seconds is set)"
+        ),
+    )
     parser.add_argument("--trajectory-only", action="store_true")
 
     parser.add_argument("--odometry-image-scale", type=float, default=0.5)
@@ -228,6 +246,36 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def validate_frame_selection_args(args: argparse.Namespace) -> None:
+    """Reject ambiguous frame-count and timestamp-chunk selections."""
+
+    duration = getattr(args, "chunk_duration_seconds", None)
+    chunk_index = getattr(args, "chunk_index", None)
+    if chunk_index is not None:
+        if isinstance(chunk_index, bool) or not isinstance(chunk_index, int):
+            raise ValueError("--chunk-index must be a non-negative integer")
+        if chunk_index < 0:
+            raise ValueError("--chunk-index must be a non-negative integer")
+    if duration is None:
+        if chunk_index is not None:
+            raise ValueError(
+                "--chunk-index requires --chunk-duration-seconds"
+            )
+        return
+
+    duration_seconds = float(duration)
+    if not isfinite(duration_seconds) or duration_seconds <= 0.0:
+        raise ValueError("--chunk-duration-seconds must be finite and positive")
+    if getattr(args, "start_frame", 0) != 0:
+        raise ValueError(
+            "--chunk-duration-seconds cannot be combined with --start-frame"
+        )
+    if getattr(args, "max_frames", None) is not None:
+        raise ValueError(
+            "--chunk-duration-seconds cannot be combined with --max-frames"
+        )
+
+
 def _estimate_odometry(
     dataset: RgbdGpsDataset,
     frames,
@@ -271,6 +319,7 @@ def _estimate_odometry(
 
 
 def run(args: argparse.Namespace) -> dict:
+    validate_frame_selection_args(args)
     cloud_config = resolve_cloud_build_config(args)
     postprocess_preset = getattr(args, "postprocess_preset", "road-map")
     postprocess_config = resolve_postprocess_config(
@@ -289,12 +338,24 @@ def run(args: argparse.Namespace) -> dict:
             flush=True,
         )
     dataset = RgbdGpsDataset(args.dataset)
-    frames = dataset.load_frames(args.start_frame, args.max_frames)
+    frame_chunk = None
+    if getattr(args, "chunk_duration_seconds", None) is not None:
+        chunk_index = getattr(args, "chunk_index", None)
+        frames, frame_chunk = dataset.load_frame_chunk(
+            float(args.chunk_duration_seconds),
+            0 if chunk_index is None else int(chunk_index),
+        )
+    else:
+        frames = dataset.load_frames(args.start_frame, args.max_frames)
     gps = dataset.interpolate_gps(frames)
+    origin_gps = gps
+    if frame_chunk is not None:
+        origin_frames = dataset.load_frames(0, 2)
+        origin_gps = dataset.interpolate_gps(origin_frames)
     origin = LocalENU(
-        origin_longitude_deg=float(gps.longitude_deg[0]),
-        origin_latitude_deg=float(gps.latitude_deg[0]),
-        origin_ellipsoid_height_m=float(gps.ellipsoid_height_m[0]),
+        origin_longitude_deg=float(origin_gps.longitude_deg[0]),
+        origin_latitude_deg=float(origin_gps.latitude_deg[0]),
+        origin_ellipsoid_height_m=float(origin_gps.ellipsoid_height_m[0]),
     )
     gps_positions = origin.geodetic_to_enu(
         gps.longitude_deg, gps.latitude_deg, gps.ellipsoid_height_m
@@ -363,6 +424,11 @@ def run(args: argparse.Namespace) -> dict:
         if key not in {"dataset", "output"}
     }
     parameters["dataset"] = str(Path(args.dataset).expanduser().resolve())
+    parameters["frame_chunk"] = (
+        asdict(frame_chunk) if frame_chunk is not None else None
+    )
+    if frame_chunk is not None:
+        parameters["chunk_index"] = frame_chunk.chunk_index
     parameters["cloud_preset"] = getattr(args, "cloud_preset", None) or "balanced"
     parameters.update(
         {
@@ -567,9 +633,10 @@ def run(args: argparse.Namespace) -> dict:
 def main() -> None:
     parser = build_parser()
     args = parser.parse_args()
-    if args.max_frames is not None and args.max_frames < 2:
-        parser.error("--max-frames must be at least 2")
     try:
+        validate_frame_selection_args(args)
+        if args.max_frames is not None and args.max_frames < 2:
+            raise ValueError("--max-frames must be at least 2")
         resolve_cloud_build_config(args)
         cloud_config = resolve_cloud_build_config(args)
         resolve_postprocess_config(

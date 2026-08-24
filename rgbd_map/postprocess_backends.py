@@ -179,7 +179,13 @@ def make_pdal_pipeline(
                     f"{-config.below_ground_tolerance_m:.9g}"
                 ),
             },
-            {"type": "writers.ply", "filename": str(output_ply)},
+            {
+                "type": "writers.ply",
+                "filename": str(output_ply),
+                # ASCII is PDAL's default and becomes unnecessarily large for a
+                # dense comparison cloud.  Match the canonical local products.
+                "storage_mode": "little endian",
+            },
         ]
     }
 

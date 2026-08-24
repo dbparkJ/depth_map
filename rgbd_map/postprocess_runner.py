@@ -9,6 +9,7 @@ from typing import Any, Mapping
 
 import numpy as np
 
+from .debug_stages import write_debug_stage_artifacts
 from .diagnostics import write_postprocess_diagnostics
 from .geodesy import LocalENU
 from .postprocess import (
@@ -421,6 +422,8 @@ def write_postprocess_execution(
             "keep_raw_cloud": output_options.keep_raw_cloud,
             "save_removed_cloud": output_options.save_removed_cloud,
             "write_postprocess_diagnostics": output_options.write_diagnostics,
+            "write_debug_stages": output_options.write_debug_stages,
+            "debug_stage_max_points": output_options.debug_stage_max_points,
         },
         "automatic_fallback": {
             "enabled": output_options.auto_fallback,
@@ -440,6 +443,24 @@ def write_postprocess_execution(
     if parameter_context:
         resolved_parameters["cli_overrides"] = dict(parameter_context)
     atomic_json_dump(parameters_path, resolved_parameters)
+
+    debug_stage_paths: dict[str, Path] = {}
+    if output_options.write_debug_stages:
+        debug_stage_paths = write_debug_stage_artifacts(
+            output_dir,
+            raw_points=result.raw_points_enu_m,
+            raw_colors=result.raw_colors_rgb,
+            removal_reason_bits=result.removal_reason_bits,
+            keep_mask=result.keep_mask,
+            stages=result.stages,
+            origin=origin,
+            trajectory_points=trajectory_enu_m,
+            max_points=output_options.debug_stage_max_points,
+            selected_preset=result.config.preset,
+            neighbor_backend=result.neighbor_backend,
+            ground_backend=result.ground_backend,
+            report=result.report,
+        )
 
     diagnostic_paths: dict[str, Path] = {}
     if output_options.write_diagnostics:
@@ -476,6 +497,16 @@ def write_postprocess_execution(
             "quality_guards_passed": bool(result.quality.passed),
             "fallback_attempted": execution.fallback_preset is not None,
             "fallback_selected": execution.fallback_selected,
+            "debug_stages": (
+                "debug_stages/index.json"
+                if output_options.write_debug_stages
+                else None
+            ),
+            "debug_stage_max_points": (
+                output_options.debug_stage_max_points
+                if output_options.write_debug_stages
+                else None
+            ),
         }
     )
     paths: dict[str, Path] = {
@@ -485,6 +516,7 @@ def write_postprocess_execution(
         "report": report_path,
         "stages": stages_path,
         "parameters": parameters_path,
+        **debug_stage_paths,
         **diagnostic_paths,
     }
     return cloud_summary, paths

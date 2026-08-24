@@ -20,6 +20,22 @@ cp .env.example .env
 .venv/bin/pip install -e '.[postprocess]'
 ```
 
+Open3D와 PDAL 비교 파이프라인을 함께 재현하려면 기존 `.venv`를 바꾸지 않고 전용
+Conda 환경을 사용합니다. `environment-postprocess.yml`은 Python 3.11, Open3D 0.19와
+PDAL 2.x를 고정합니다. 프로젝트 테스트 의존성은 환경 생성 후 설치합니다.
+
+```bash
+conda env create -f environment-postprocess.yml
+conda run -n depth-map-postprocess python -m pip install -e '.[test]'
+conda run -n depth-map-postprocess python -c \
+  "import open3d as o3d; print(o3d.__version__)"
+conda run -n depth-map-postprocess pdal --version
+```
+
+이 환경에서 실행할 때는 `conda run --no-capture-output -n
+depth-map-postprocess python ...` 형태를 사용해야 후처리 자식 프로세스도 같은 PDAL
+실행 파일을 찾습니다.
+
 `.env`에 VWorld 키를 지정합니다. 키와 허용 도메인의 조합은 VWorld 개발자 설정과
 일치해야 합니다.
 
@@ -86,6 +102,12 @@ surface 저점 필터, 밝은 저신뢰 결합 규칙을 순서대로 적용합�
 있습니다. 임계값 override는 `--radius-outlier-radius-m`,
 `--postprocess-tile-size-m`, `--road-corridor-half-width-m` 등을 `--help`에서 확인합니다.
 
+필터를 순서대로 검토해야 하는 실행에는 `--write-debug-stages`를 추가합니다. 각 단계의
+전체 점 수와 제거 회계는 JSON에 기록하고, PLY/BIN/PNG는 기본 최대 500,000점의 결정적
+샘플로 저장합니다. 정식 `cloud_raw_enu.ply`, `cloud_clean_enu.ply`,
+`cloud_removed_enu.ply`는 이 상한과 무관하게 기존 전체 출력 계약을 유지합니다.
+진단 상한은 `--debug-stage-max-points`로 조정할 수 있습니다.
+
 품질 guard가 coverage/구조물 과삭제를 감지하면 동일 raw에서 `conservative`를, 제거가
 사실상 없으면 `aggressive`를 최대 한 번만 시험하고 더 안전한 결과를 선택합니다. RGB-D,
 VO, GPS와 raw 점군을 다시 만들지 않으므로 전체 매핑 실행은 반복되지 않습니다.
@@ -117,6 +139,47 @@ Open3D/PDAL을 사용할 수 없으면 조용히 설정을 바꾸지 않고 시�
 추가합니다. 반복 관측된 흰 차선·표지판·차량·콘크리트는 색만으로 삭제하지 않습니다.
 
 ## 지도 생성
+
+### 5분 시간 청크
+
+대형 고밀도 입력은 전체 노선을 한 프로세스에서 반복하지 않고, 호출 한 번에 시간 청크
+하나만 생성합니다. 경계는 데이터셋의 첫 synchronized RGB-D timestamp를 기준으로 한
+반개구간 `[start, end)`이므로 인접 청크가 겹치지 않습니다. 모든 청크는 데이터셋 첫
+프레임의 공통 ENU 원점을 사용해 이후 결합할 수 있습니다.
+
+기존 `high_density_map` 코스의 첫 5분을 보수적으로 정제하고 단계별 진단까지 남기는
+명령은 다음과 같습니다.
+
+```bash
+conda run --no-capture-output -n depth-map-postprocess \
+  python map_rgbd_gps.py \
+  /home/geon_lab/AI_PARK/2026_camera_lidar_calibration/safe_gard_test/data/2026-08-19_10-16-33_raw \
+  --output artifacts/high_density_map_5min_chunk_0000 \
+  --pose-mode hybrid \
+  --cloud-preset dense \
+  --min-depth-m 0.7 \
+  --chunk-duration-seconds 300 \
+  --chunk-index 0 \
+  --postprocess-preset conservative \
+  --radius-outlier-radius-m 0.30 \
+  --statistical-std-ratio 3.5 \
+  --below-ground-tolerance-m 0.20 \
+  --neighbor-backend open3d \
+  --ground-backend auto \
+  --write-debug-stages \
+  --debug-stage-max-points 500000 \
+  --no-auto-postprocess-fallback
+```
+
+이 명령으로 검증한 chunk 0은 raw 20,000,000점, clean 18,429,603점이며 도로 하부
+후보 581,659점을 모두 제거했다. 노선 199개 구간은 전부 유지됐지만 XY occupied-cell
+coverage는 81.03%라 90% 품질 guard는 아직 통과하지 못했다. 실제 수치와 다음 조정 계획은
+`DEPTH_MAP_5MIN_CHUNK_DEBUG_REPORT.md`에 기록했다.
+
+다음 구간은 output과 `--chunk-index`를 함께 `0001`/`1`로 바꿔 별도 호출합니다. 한 번에
+전체 인덱스를 도는 자동 루프는 제공하지 않습니다. 먼저 현재 청크의
+`data/debug_stages/index.json`과 진단 이미지를 승인한 뒤 다음 청크를 실행하십시오.
+`--chunk-duration-seconds`는 `--start-frame` 또는 `--max-frames`와 함께 사용할 수 없습니다.
 
 일반적인 주행 구간은 다음처럼 생성합니다.
 
@@ -253,6 +316,10 @@ CloudCompare에서 `data/cloud_clean_enu.ply`와 raw/removed를 함께 확인하
 - `diagnostics/top_before_after.png`, `side_before_after.png`: raw/clean/removed 비교
 - `diagnostics/removed_reason_top.png`: 제거 사유 top view
 - `diagnostics/representative_tiles.json`, `run_summary.txt`: 대표 타일과 실행 요약
+- `data/debug_stages/index.json`: 단계 순서, 전체 count, 샘플 상한과 제거 회계 검증
+- `data/debug_stages/NN_stage/`: 단계별 survivor/removal 샘플 PLY·BIN과 `stage.json`
+- `diagnostics/debug_stages/NN_stage/`: 모든 단계가 같은 축을 쓰는 top/side 비교 PNG
+- `diagnostics/pdal_clean_comparison.ply`: PDAL이 있을 때 생성하는 binary 비교 결과
 - `viewer/`: VWorld/Cesium 브라우저 뷰어
 
 `summary.json`에서는 항상 `point_count == ply_point_count == clean_point_count`이고

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterator, Mapping
 
@@ -26,6 +27,24 @@ _REASON_COLORS_BY_CODE: dict[int, tuple[int, int, int]] = {
 }
 _PANEL_BACKGROUND_RGB = np.array([8, 13, 20], dtype=np.uint8)
 _PANEL_BORDER_RGB = (54, 72, 92)
+
+
+@dataclass(frozen=True)
+class DebugProjectionContext:
+    """Fixed projection geometry shared by every debug-stage image."""
+
+    top_bounds: tuple[tuple[float, float], tuple[float, float]]
+    side_bounds: tuple[tuple[float, float], tuple[float, float]]
+    side_origin_xy: tuple[float, float]
+    side_axis_xy: tuple[float, float]
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "top_bounds": [list(bounds) for bounds in self.top_bounds],
+            "side_bounds": [list(bounds) for bounds in self.side_bounds],
+            "side_origin_xy": list(self.side_origin_xy),
+            "side_axis_xy": list(self.side_axis_xy),
+        }
 
 
 def _as_points(value: np.ndarray | None, name: str) -> np.ndarray:
@@ -81,15 +100,33 @@ def _as_reason_array(
     return reasons
 
 
+def _as_selection_mask(
+    value: np.ndarray | None,
+    count: int,
+    name: str,
+) -> np.ndarray | None:
+    if value is None:
+        return None
+    mask = np.asarray(value)
+    if mask.shape != (count,):
+        raise ValueError(f"{name} must have shape ({count},)")
+    return mask.astype(bool, copy=False)
+
+
 def _iter_finite_point_chunks(
     points: np.ndarray,
+    selection_mask: np.ndarray | None = None,
 ) -> Iterator[tuple[int, int, np.ndarray, np.ndarray | None]]:
-    """Yield bounded finite point chunks and an optional companion-array mask."""
+    """Yield bounded selected/finite chunks and their companion-array mask."""
+
+    selected = _as_selection_mask(selection_mask, len(points), "selection_mask")
 
     for begin in range(0, len(points), _DIAGNOSTIC_CHUNK_POINTS):
         end = min(begin + _DIAGNOSTIC_CHUNK_POINTS, len(points))
         chunk = points[begin:end]
         finite = np.isfinite(chunk).all(axis=1)
+        if selected is not None:
+            finite &= selected[begin:end]
         if not bool(np.any(finite)):
             continue
         if bool(np.all(finite)):
@@ -160,13 +197,23 @@ def _projected_bounds(
     projection: str,
     origin_xy: np.ndarray | None = None,
     axis_xy: np.ndarray | None = None,
+    selection_masks: tuple[np.ndarray | None, ...] | None = None,
 ) -> tuple[tuple[float, float], tuple[float, float]]:
     x_min = np.inf
     x_max = -np.inf
     y_min = np.inf
     y_max = -np.inf
-    for points in point_sets:
-        for _, _, finite_points, _ in _iter_finite_point_chunks(points):
+    masks = (
+        tuple(None for _ in point_sets)
+        if selection_masks is None
+        else selection_masks
+    )
+    if len(masks) != len(point_sets):
+        raise ValueError("selection_masks must align with point_sets")
+    for points, selection_mask in zip(point_sets, masks, strict=True):
+        for _, _, finite_points, _ in _iter_finite_point_chunks(
+            points, selection_mask
+        ):
             x, y = _project_chunk(finite_points, projection, origin_xy, axis_xy)
             x_min = min(x_min, float(np.min(x)))
             x_max = max(x_max, float(np.max(x)))
@@ -175,7 +222,10 @@ def _projected_bounds(
     return _padded_bounds(x_min, x_max), _padded_bounds(y_min, y_max)
 
 
-def _xy_moments(points: np.ndarray) -> dict[str, Any]:
+def _xy_moments(
+    points: np.ndarray,
+    selection_mask: np.ndarray | None = None,
+) -> dict[str, Any]:
     count = 0
     sum_x = 0.0
     sum_y = 0.0
@@ -184,7 +234,7 @@ def _xy_moments(points: np.ndarray) -> dict[str, Any]:
     sum_yy = 0.0
     first: np.ndarray | None = None
     last: np.ndarray | None = None
-    for _, _, finite_points, _ in _iter_finite_point_chunks(points):
+    for _, _, finite_points, _ in _iter_finite_point_chunks(points, selection_mask):
         x = finite_points[:, 0].astype(np.float64, copy=False)
         y = finite_points[:, 1].astype(np.float64, copy=False)
         if first is None:
@@ -294,6 +344,7 @@ def _rasterize_points(
     axis_xy: np.ndarray | None = None,
     primary_reason: np.ndarray | None = None,
     reason_bits: np.ndarray | None = None,
+    selection_mask: np.ndarray | None = None,
 ) -> tuple[np.ndarray, int]:
     pixel_count = width * height
     counts = np.zeros(pixel_count, dtype=np.int64)
@@ -309,7 +360,9 @@ def _rasterize_points(
     x_scale = (width - 1) / max(x_max - x_min, 1e-9)
     y_scale = (height - 1) / max(y_max - y_min, 1e-9)
 
-    for begin, end, finite_points, finite_mask in _iter_finite_point_chunks(points):
+    for begin, end, finite_points, finite_mask in _iter_finite_point_chunks(
+        points, selection_mask
+    ):
         x, y = _project_chunk(finite_points, projection, origin_xy, axis_xy)
         px = np.floor((x - x_min) * x_scale).astype(np.int64)
         py = np.floor((y_max - y) * y_scale).astype(np.int64)
@@ -417,15 +470,21 @@ def _write_comparison_image(
     projection: str,
     origin_xy: np.ndarray | None = None,
     axis_xy: np.ndarray | None = None,
+    selection_masks: tuple[
+        np.ndarray | None,
+        np.ndarray | None,
+        np.ndarray | None,
+    ] = (None, None, None),
 ) -> None:
     panel_width, panel_height = panel_size
     defaults = ((88, 184, 255), (100, 235, 165), (255, 120, 70))
     panels: list[np.ndarray] = []
-    for points, color, label, default in zip(
+    for points, color, label, default, selection_mask in zip(
         point_sets,
         colors,
         labels,
         defaults,
+        selection_masks,
         strict=True,
     ):
         image, visible_count = _rasterize_points(
@@ -438,11 +497,118 @@ def _write_comparison_image(
             projection=projection,
             origin_xy=origin_xy,
             axis_xy=axis_xy,
+            selection_mask=selection_mask,
         )
         panels.append(_label_panel(image, label, visible_count))
     canvas = np.concatenate(panels, axis=1)
     if not cv2.imwrite(str(path), cv2.cvtColor(canvas, cv2.COLOR_RGB2BGR)):
         raise OSError(f"failed to write diagnostic image: {path}")
+
+
+def prepare_debug_projection_context(
+    raw_points: np.ndarray,
+    trajectory_points: np.ndarray | None = None,
+) -> DebugProjectionContext:
+    """Resolve one top/side frame to reuse across every cleanup stage."""
+
+    raw = _as_points(raw_points, "raw_points")
+    trajectory = _as_points(trajectory_points, "trajectory_points")
+    empty = np.empty((0, 3), dtype=np.float32)
+    top_bounds = _projected_bounds((raw,), "top")
+    origin_xy, axis_xy = _side_projection_basis(trajectory, raw, empty, empty)
+    side_bounds = _projected_bounds(
+        (raw,),
+        "side",
+        origin_xy,
+        axis_xy,
+    )
+    return DebugProjectionContext(
+        top_bounds=top_bounds,
+        side_bounds=side_bounds,
+        side_origin_xy=(float(origin_xy[0]), float(origin_xy[1])),
+        side_axis_xy=(float(axis_xy[0]), float(axis_xy[1])),
+    )
+
+
+def write_debug_stage_diagnostics(
+    output_dir: str | Path,
+    raw_points: np.ndarray,
+    raw_colors: np.ndarray,
+    before_mask: np.ndarray,
+    after_mask: np.ndarray,
+    removed_delta_mask: np.ndarray,
+    *,
+    stage_name: str,
+    projection: DebugProjectionContext,
+    image_size: tuple[int, int] = (560, 520),
+) -> dict[str, Path]:
+    """Write input/output/new-removal panels without materializing stage clouds.
+
+    All three panels address the same raw arrays through boolean masks. The caller
+    supplies a projection computed once for the full run, which prevents per-stage
+    auto-scaling from making a destructive filter look deceptively unchanged.
+    """
+
+    output_path = Path(output_dir)
+    if len(image_size) != 2 or min(image_size) < 128:
+        raise ValueError("image_size must contain two dimensions of at least 128 pixels")
+    output_path.mkdir(parents=True, exist_ok=True)
+    raw = _as_points(raw_points, "raw_points")
+    colors = _as_colors(raw_colors, len(raw), "raw_colors")
+    assert colors is not None
+    before = _as_selection_mask(before_mask, len(raw), "before_mask")
+    after = _as_selection_mask(after_mask, len(raw), "after_mask")
+    removed = _as_selection_mask(
+        removed_delta_mask,
+        len(raw),
+        "removed_delta_mask",
+    )
+    assert before is not None and after is not None and removed is not None
+    if np.any(after & ~before):
+        raise ValueError("after_mask must be a subset of before_mask")
+    if np.any(removed & ~before) or np.any(removed & after):
+        raise ValueError("removed_delta_mask must be the disjoint before/after delta")
+    if not np.array_equal(before, after | removed):
+        raise ValueError("before_mask must equal after_mask union removed_delta_mask")
+
+    display_name = stage_name.replace("_", " ")
+    paths = {
+        "top": output_path / "top_input_output_removed.png",
+        "side": output_path / "side_input_output_removed.png",
+    }
+    point_sets = (raw, raw, raw)
+    color_sets = (colors, colors, None)
+    labels = (
+        f"Input: {display_name}",
+        f"Output: {display_name}",
+        f"Removed in: {display_name}",
+    )
+    masks = (before, after, removed)
+    _write_comparison_image(
+        paths["top"],
+        point_sets,
+        color_sets,
+        labels,
+        projection.top_bounds,
+        image_size,
+        projection="top",
+        selection_masks=masks,
+    )
+    origin_xy = np.asarray(projection.side_origin_xy, dtype=np.float64)
+    axis_xy = np.asarray(projection.side_axis_xy, dtype=np.float64)
+    _write_comparison_image(
+        paths["side"],
+        point_sets,
+        color_sets,
+        labels,
+        projection.side_bounds,
+        image_size,
+        projection="side",
+        origin_xy=origin_xy,
+        axis_xy=axis_xy,
+        selection_masks=masks,
+    )
+    return paths
 
 
 def _tile_count_map(points: np.ndarray, tile_size_m: float) -> dict[tuple[int, int], int]:
@@ -743,4 +909,10 @@ def write_postprocess_diagnostics(
 generate_postprocess_diagnostics = write_postprocess_diagnostics
 
 
-__all__ = ["generate_postprocess_diagnostics", "write_postprocess_diagnostics"]
+__all__ = [
+    "DebugProjectionContext",
+    "generate_postprocess_diagnostics",
+    "prepare_debug_projection_context",
+    "write_debug_stage_diagnostics",
+    "write_postprocess_diagnostics",
+]

@@ -166,3 +166,41 @@ def test_postprocess_only_rewrites_clean_products_not_trajectory_or_raw(tmp_path
     }
     after = {path.name: (_digest(path), path.stat().st_mtime_ns) for path in protected}
     assert after == before
+
+
+def test_postprocess_only_can_write_capped_debug_stage_artifacts(tmp_path: Path):
+    output = _make_existing_output(tmp_path)
+    data = output / "data"
+    protected = [
+        data / "trajectory.json",
+        data / "trajectory.csv",
+        data / "odometry.csv",
+        data / "cloud_raw_enu.ply",
+        data / "cloud_raw_metadata.npz",
+    ]
+    before = {path.name: (_digest(path), path.stat().st_mtime_ns) for path in protected}
+    args = _args(output, "road-map")
+    args.write_debug_stages = True
+    args.debug_stage_max_points = 5
+    args.write_postprocess_diagnostics = False
+
+    summary = run(args)
+
+    index_path = data / "debug_stages" / "index.json"
+    index = json.loads(index_path.read_text(encoding="utf-8"))
+    assert summary["cloud"]["debug_stages"] == "debug_stages/index.json"
+    assert summary["cloud"]["debug_stage_max_points"] == 5
+    assert index["debug_stage_max_points"] == 5
+    assert index["accounting"]["delta_union_equals_final_removed"] is True
+    assert len(index["stages"]) == 8
+    for record in index["stages"]:
+        stage = json.loads(
+            (output / record["stage_json"]).read_text(encoding="utf-8")
+        )
+        assert stage["survivors"]["sample_point_count"] <= 5
+        assert stage["removed_this_stage"]["sample_point_count"] <= 5
+        for relative in stage["diagnostics"].values():
+            assert (output / relative).is_file()
+
+    after = {path.name: (_digest(path), path.stat().st_mtime_ns) for path in protected}
+    assert after == before

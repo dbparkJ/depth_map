@@ -1,0 +1,8 @@
+name: depth-map-postprocess
+channels:
+  - conda-forge
+dependencies:
+  - python=3.11
+  - open3d=0.19.*
+  - pdal>=2.8,<3
+  - pip

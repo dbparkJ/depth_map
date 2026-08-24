@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "imu-free-rgbd-map"
+version = "0.1.0"
+description = "IMU-free RGB-D visual odometry and GPS georeferenced mapping"
+requires-python = ">=3.10"
+dependencies = [
+  "numpy>=2.0",
+  "opencv-python-headless>=4.10",
+  "Pillow>=10",
+  "pyproj>=3.6",
+  "scipy>=1.13",
+]
+
+[project.optional-dependencies]
+test = ["pytest>=8"]
+
+[project.scripts]
+rgbd-gps-map = "rgbd_map.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["rgbd_map*"]
+

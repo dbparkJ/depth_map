@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>IMU-free RGB-D GPS Map</title>
+  <link rel="stylesheet" href="./style.css">
+  <script src="./runtime-config.js"></script>
+  <script>
+    (function loadVWorldDuringDocumentParse() {
+      const cfg = window.RGBD_MAP_CONFIG || {};
+      const params = new URLSearchParams(window.location.search);
+      const forcedEngine = params.get("engine") || cfg.preferredEngine;
+      const key = params.get("key") || cfg.vworldApiKey || "";
+      if (forcedEngine === "cesium" || !key) return;
+      let src = "https://map.vworld.kr/js/webglMapInit.js.do?version=3.0&apiKey=" + encodeURIComponent(key);
+      const domain = cfg.vworldDomain || "";
+      if (domain) src += "&domain=" + encodeURIComponent(domain);
+      document.write('<script src="' + src + '"><\/script>');
+    })();
+  </script>
+</head>
+<body>
+  <div id="map"></div>
+  <aside id="panel">
+    <header>
+      <div>
+        <div class="eyebrow">IMU-FREE GEOREFERENCING</div>
+        <h1>RGB-D 실제 지도 정합</h1>
+      </div>
+      <span id="engineBadge" class="badge">초기화 중</span>
+    </header>
+
+    <section class="summary-grid">
+      <div><span>프레임</span><strong id="frameCount">-</strong></div>
+      <div><span>점 개수</span><strong id="pointCount">-</strong></div>
+      <div><span>VO 성공</span><strong id="voRate">-</strong></div>
+      <div><span>GPS 제약 잔차 p95</span><strong id="residualP95">-</strong></div>
+    </section>
+
+    <section>
+      <h2>표시 레이어</h2>
+      <label class="toggle"><input id="showCloud" type="checkbox" checked><span>컬러 점군</span></label>
+      <label class="toggle"><input id="showFused" type="checkbox" checked><span class="swatch cyan"></span><span>RGB-D+GPS 궤적</span></label>
+      <label class="toggle"><input id="showGps" type="checkbox" checked><span class="swatch red"></span><span>보간 GPS 궤적</span></label>
+      <label class="toggle"><input id="showRaw" type="checkbox"><span class="swatch amber"></span><span>그래프 전 GPS 보조 VO</span></label>
+      <label class="toggle"><input id="showResiduals" type="checkbox"><span class="swatch white"></span><span>GPS 제약 잔차 벡터</span></label>
+    </section>
+
+    <section>
+      <h2>지도 정합 미세 조정</h2>
+      <label class="control">동쪽 이동 <output id="eastValue">0.0 m</output><input id="eastOffset" type="range" min="-20" max="20" step="0.1" value="0"></label>
+      <label class="control">북쪽 이동 <output id="northValue">0.0 m</output><input id="northOffset" type="range" min="-20" max="20" step="0.1" value="0"></label>
+      <label class="control">높이 이동 <output id="upValue">0.0 m</output><input id="upOffset" type="range" min="-40" max="40" step="0.1" value="0"></label>
+      <label class="control">점 크기 <output id="pointSizeValue">2.0 px</output><input id="pointSize" type="range" min="1" max="6" step="0.5" value="2"></label>
+      <div class="button-row"><button id="resetOffsets">오프셋 초기화</button><button id="flyToData">전체 보기</button></div>
+    </section>
+
+    <section class="notice">
+      <strong>해석 주의</strong>
+      <p>GPS는 최적화 기준이지 독립 정답이 아닙니다. 도로 경계·건물·위성영상과 점군을 직접 비교해야 실제 절대 정합 상태를 판단할 수 있습니다.</p>
+    </section>
+
+    <footer id="status">데이터를 읽는 중입니다.</footer>
+  </aside>
+  <div id="loading"><div class="spinner"></div><span id="loadingText">지도 엔진 로딩 중</span></div>
+  <script src="./app.js"></script>
+</body>
+</html>

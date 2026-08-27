@@ -206,6 +206,50 @@ coverage는 81.03%라 90% 품질 guard는 아직 통과하지 못했다. 실제 
 `data/debug_stages/index.json`과 진단 이미지를 승인한 뒤 다음 청크를 실행하십시오.
 `--chunk-duration-seconds`는 `--start-frame` 또는 `--max-frames`와 함께 사용할 수 없습니다.
 
+### 전체 데이터를 60초 temporal 청크로 처리
+
+`2026-08-19_10-16-33_raw`은 동기화 RGB-D 13,283프레임, timestamp span 1,208.353초이므로
+60초 반개구간 청크가 총 21개(`chunk-index` 0–20)입니다. 아래 루프는 메모리 사용이
+겹치지 않도록 한 번에 한 청크만 순차 실행하며, 중간 청크가 실패하면 즉시 중단합니다.
+
+```bash
+set -euo pipefail
+
+DATASET_PATH=/home/geon_lab/AI_PARK/2026_camera_lidar_calibration/safe_gard_test/data/2026-08-19_10-16-33_raw
+
+for CHUNK_INDEX in $(seq 0 20); do
+  CHUNK_TAG=$(printf '%04d' "${CHUNK_INDEX}")
+
+  conda run --no-capture-output -n depth-map-postprocess \
+    python map_rgbd_gps.py \
+    "${DATASET_PATH}" \
+    --output "artifacts/ultra_density_map_60sec_chunk_${CHUNK_TAG}_temporal_v1" \
+    --pose-mode hybrid \
+    --cloud-preset dense \
+    --cloud-frame-stride 1 \
+    --pixel-stride 1 \
+    --voxel-size-m 0.03 \
+    --per-frame-max-points 0 \
+    --max-points 40000000 \
+    --browser-max-points 1000000 \
+    --min-depth-m 0.7 \
+    --chunk-duration-seconds 60 \
+    --chunk-index "${CHUNK_INDEX}" \
+    --postprocess-preset road-map-temporal \
+    --neighbor-backend scipy \
+    --ground-backend local \
+    --write-debug-stages \
+    --debug-stage-max-points 500000 \
+    --no-auto-postprocess-fallback
+done
+```
+
+각 디렉터리에는 해당 구간의 `data/cloud_clean_enu.ply`가 별도로 생성됩니다. 모든 청크는
+데이터셋 첫 프레임의 공통 ENU 원점을 사용하지만, 위 명령은 청크 PLY를 마지막에 하나로
+병합하지 않습니다. 검증한 첫 60초 청크 하나는 1시간 3분 18초, peak RSS 17.43 GiB가
+걸렸으므로 21개 전체 순차 실행은 장시간 작업입니다. 마지막 `chunk-index 20`은 약
+8.35초 구간이라 앞선 청크보다 짧습니다.
+
 일반적인 주행 구간은 다음처럼 생성합니다.
 
 ```bash

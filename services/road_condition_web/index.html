@@ -1,0 +1,151 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Depth Map 도로 상태 시뮬레이터</title>
+  <link rel="stylesheet" href="./style.css">
+</head>
+<body>
+  <header class="topbar">
+    <div>
+      <div class="eyebrow">DEPTH MAP · ROAD CONDITION</div>
+      <h1>도로 상태 분석 시뮬레이터</h1>
+    </div>
+    <div class="top-actions">
+      <span id="apiStatus" class="status-pill pending">API 확인 중</span>
+      <a id="reportLink" class="button ghost disabled" href="#" target="_blank" rel="noopener">HTML 리포트</a>
+    </div>
+  </header>
+
+  <main class="layout">
+    <aside class="sidebar">
+      <section class="panel">
+        <h2>분석 실행</h2>
+        <label>입력 종류
+          <select id="sourceType">
+            <option value="synthetic">내장 합성 도로</option>
+            <option value="mapping_bundle">depth_map 결과</option>
+          </select>
+        </label>
+        <div id="syntheticFields">
+          <label>데모 프로파일
+            <select id="syntheticProfile">
+              <option value="mixed">포트홀 + 러팅 + 범프</option>
+              <option value="potholes">포트홀</option>
+              <option value="rutting">러팅</option>
+              <option value="flat">평탄 기준면</option>
+            </select>
+          </label>
+        </div>
+        <div id="mappingFields" hidden>
+          <label>워크스페이스 상대 경로
+            <input id="mappingPath" type="text" placeholder="route_a/temporal_60sec/chunk_0000">
+          </label>
+          <p class="help">Compose의 <code>ROAD_CONDITION_WORKSPACE</code>로 마운트한 디렉터리를 기준으로 입력합니다.</p>
+          <label>점군 단계
+            <select id="cloudStage">
+              <option value="raw">raw — 포트홀 보존 우선</option>
+              <option value="clean">clean</option>
+              <option value="removed">removed — 진단 전용</option>
+            </select>
+          </label>
+        </div>
+        <div class="two-columns">
+          <label>격자 크기(m)<input id="gridSize" type="number" min="0.03" max="0.50" step="0.01" value="0.10"></label>
+          <label>도로 반폭(m)<input id="halfWidth" type="number" min="1.0" max="10" step="0.1" value="3.5"></label>
+          <label>포트홀 깊이(m)<input id="potholeDepth" type="number" min="0.01" max="0.30" step="0.005" value="0.035"></label>
+          <label>포트홀 면적(㎡)<input id="potholeArea" type="number" min="0.005" max="5" step="0.005" value="0.035"></label>
+          <label>러팅 깊이(m)<input id="rutDepth" type="number" min="0.005" max="0.20" step="0.005" value="0.020"></label>
+          <label>구간 길이(m)<input id="segmentLength" type="number" min="5" max="100" step="5" value="20"></label>
+        </div>
+        <button id="runButton" class="button primary full">새 분석 실행</button>
+        <div id="jobProgress" class="progress-block" hidden>
+          <div class="progress-track"><div id="progressBar"></div></div>
+          <span id="progressText">대기 중</span>
+        </div>
+      </section>
+
+      <section class="panel">
+        <h2>표시 레이어</h2>
+        <label class="toggle"><input id="showResidual" type="checkbox" checked><span>높이 잔차 히트맵</span></label>
+        <label class="toggle"><input id="showPotholes" type="checkbox" checked><span>포트홀</span></label>
+        <label class="toggle"><input id="showRutting" type="checkbox" checked><span>러팅</span></label>
+        <label class="toggle"><input id="showBumps" type="checkbox" checked><span>범프·솟음</span></label>
+        <label>높이 강조 배율 <output id="exaggerationValue">1×</output>
+          <input id="exaggeration" type="range" min="1" max="5" step="0.5" value="1">
+        </label>
+      </section>
+
+      <section class="panel">
+        <h2>유지보수 시나리오</h2>
+        <label>포트홀 패칭 단가(원/㎡)<input id="patchPrice" type="number" min="0" step="1000" value="85000"></label>
+        <label>러팅 덧씌우기 단가(원/㎡)<input id="rutPrice" type="number" min="0" step="1000" value="52000"></label>
+        <label>강우 시나리오(mm)<input id="rainfall" type="number" min="0" max="1000" step="5" value="30"></label>
+        <button id="scenarioButton" class="button secondary full" disabled>시나리오 계산</button>
+        <div id="scenarioResult" class="scenario-result muted">분석 완료 후 계산할 수 있습니다.</div>
+      </section>
+
+      <section class="panel compact">
+        <h2>최근 작업</h2>
+        <div id="jobList" class="job-list"><span class="muted">작업 없음</span></div>
+      </section>
+    </aside>
+
+    <section class="content">
+      <div id="emptyState" class="empty-state">
+        <h2>실행 가능한 합성 도로가 포함되어 있습니다.</h2>
+        <p>별도 데이터 없이 Docker Compose를 실행하면 자동으로 데모 분석을 생성합니다.</p>
+      </div>
+
+      <div id="resultView" hidden>
+        <section class="summary-grid">
+          <article><span>형상 점수</span><strong id="geometryScore">-</strong><em id="geometryGrade">-</em></article>
+          <article><span>포트홀</span><strong id="potholeCount">-</strong><small id="potholeArea">-</small></article>
+          <article><span>최대 포트홀</span><strong id="maxPotholeDepth">-</strong></article>
+          <article><span>최대 러팅</span><strong id="maxRutDepth">-</strong></article>
+          <article><span>표면 커버리지</span><strong id="coverageRatio">-</strong></article>
+          <article><span>분석 포인트</span><strong id="analyzedPoints">-</strong></article>
+        </section>
+
+        <section class="panel visualization-panel">
+          <div class="section-heading">
+            <div><span class="eyebrow">LOCAL ROAD COORDINATE</span><h2>도로면 잔차 및 결함</h2></div>
+            <div class="legend">
+              <span><i class="legend-swatch depression"></i>함몰</span>
+              <span><i class="legend-swatch neutral"></i>기준면</span>
+              <span><i class="legend-swatch rise"></i>솟음</span>
+            </div>
+          </div>
+          <div class="canvas-wrap"><canvas id="surfaceCanvas"></canvas></div>
+          <div class="axis-note">가로: 진행거리 s · 세로: 횡방향 t · 색상: 기준 도로면 대비 높이 잔차</div>
+        </section>
+
+        <div class="detail-grid">
+          <section class="panel">
+            <div class="section-heading"><h2>선택 결함</h2><span id="selectedBadge" class="status-pill">미선택</span></div>
+            <div id="defectDetail" class="muted">지도 또는 아래 표에서 결함을 선택하세요.</div>
+            <svg id="profileChart" viewBox="0 0 640 220" role="img" aria-label="선택 지점 횡단면"></svg>
+          </section>
+          <section class="panel">
+            <h2>구간별 상태</h2>
+            <div class="table-scroll"><table id="segmentTable"><thead><tr><th>구간</th><th>커버리지</th><th>포트홀</th><th>러팅</th><th>점수</th><th>등급</th></tr></thead><tbody></tbody></table></div>
+          </section>
+        </div>
+
+        <section class="panel">
+          <div class="section-heading"><h2>검출 결함 목록</h2><span id="defectCountLabel" class="muted"></span></div>
+          <div class="table-scroll"><table id="defectTable"><thead><tr><th>ID</th><th>종류</th><th>체인리지</th><th>심각도</th><th>주요 측정값</th><th>신뢰도</th></tr></thead><tbody></tbody></table></div>
+        </section>
+
+        <section class="notice">
+          <strong>해석 주의</strong>
+          <p>이 MVP의 점수는 내부 형상 점수이며 공식 PCI가 아닙니다. 평탄성 값도 IRI가 아닌 roughness proxy입니다. 실제 노선 적용 전 측량 기준 포트홀·러팅 및 평탄 기준면으로 보정해야 합니다.</p>
+        </section>
+      </div>
+    </section>
+  </main>
+
+  <script src="./app.js"></script>
+</body>
+</html>

@@ -12,6 +12,7 @@ dependencies = [
   "opencv-python-headless>=4.10",
   "Pillow>=10",
   "pyproj>=3.6",
+  "PyYAML>=6",
   "scipy>=1.13",
 ]
 

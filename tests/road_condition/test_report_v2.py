@@ -55,6 +55,7 @@ def test_report_v2_matches_json_and_regenerates_deterministically(tmp_path) -> N
     assert manifest["mapping_commit_sha"] is None
     assert "공식 PCI/IRI" in html
     assert "mapping_commit=N/A" in html
+    assert "scoring_profile=internal-geometry-mvp-v1@1.0.0" in html
     score_match = re.search(
         r'data-json-path="scores\.geometry_score">([^<]+)', html
     )
@@ -69,6 +70,7 @@ def test_report_v2_matches_json_and_regenerates_deterministically(tmp_path) -> N
         products.summary["scores"]["geometry_score"]
     )
     assert summary_rows["dataset_id"]["value"] == "N/A"
+    assert summary_rows["scoring_profile_version"]["value"] == "1.0.0"
     with (report / "defects.csv").open(encoding="utf-8-sig", newline="") as stream:
         assert len(list(csv.DictReader(stream))) == len(products.defects)
 

@@ -466,8 +466,9 @@ manifest만 먼저 읽고 선택한 완료 tile의 summary/surface/defect/segmen
 
 기본 지도는 외부 네트워크가 필요 없는 local ENU evidence renderer다. VWorld/Cesium은 adapter
 선택과 명확한 fallback을 제공하지만 API key/token과 WGS84 변환 설정 전에는 basemap을
-활성화하지 않는다. 검수 수정·승인은 분석 API와 섞지 않고 Stage 10까지 read-only다. 경량 3D
-evidence는 downsampled surface preview만 사용하며 1×/2×/5× Z 강조를 지원한다.
+활성화하지 않는다. 경량 3D evidence는 downsampled surface preview만 사용하며 1×/2×/5× Z
+강조를 지원한다. route tile은 계속 read-only이고 완료 job의 수동 검수는 Stage 10 audit API를
+통해서만 별도 저장한다.
 
 ## 16. Stage 08 보고서 v2 계약
 
@@ -513,3 +514,30 @@ manifest/metric/BEV 후처리를 검증하는 contract image이며 운영 crack 
 후처리 defect는 `source=rgb_ai`, model name/version/weights hash와
 `rgb_ai_experimental_unvalidated` flag를 갖는다. 작업자 수정 시 top-level prediction을 덮어쓰지
 않고 `original_prediction`, 그 SHA-256, revision actor/time/reason/patch를 모두 보존한다.
+
+## 18. Stage 10 점수 profile과 검수 workflow
+
+점수 규칙은 `scoring_profiles/<profile_id>.yaml`에서 로드한다. 기본
+`internal-geometry-mvp-v1@1.0.0`은 기존 `AnalysisConfig.score`와 20m 구간을 그대로 재현하는
+experimental profile이다. 기관 source document, effective date, severity 기준표가 없으므로
+standard 명칭과 자동 승인을 허용하지 않는다.
+
+profile에는 distress type, severity/density 정의, score weights, missing metric 정책, 차로 평가,
+승인 상태와 hash가 포함된다. API의 명시적 config override는 허용하되 결과에
+`custom_override_applied=true`를 남긴다. summary, HTML/CSV/PDF report와 review event가 같은
+profile ID/version/hash를 기록한다. `validated_standard`가 아닌 profile이 standard naming을
+켜면 로더가 거부한다.
+
+완료 job을 처음 검수할 때 `result/defects.json`의 canonical SHA-256과 각 raw prediction 사본을
+`review_bundle.json`에 기록한다. 상태는 `pending`, `accepted`, `modified`, `rejected`,
+`needs_recollection`이며, 변경은 다음 endpoint로만 추가한다.
+
+```text
+GET  /api/v1/jobs/{job_id}/reviews
+POST /api/v1/jobs/{job_id}/reviews/{defect_id}
+```
+
+수정은 전체 `after` defect와 expected version을 요구한다. event는 before/after, actor, action,
+UTC time, reason, profile, 이전/새 version을 보존한다. raw prediction hash가 달라지면 검수를
+중단하고 stale version은 HTTP 409로 거부한다. 현재 인증은 없으므로 actor는 신원 보장이 없는
+audit label이며, route tile 검수와 관리자 2단계 승인은 후속 범위다.

@@ -12,6 +12,7 @@
     geojson: null,
     enuGeojson: null,
     segments: [],
+    reviews: null,
     selectedDefect: null,
     pollingTimer: null,
     canvasGeometry: null,
@@ -200,15 +201,16 @@
   }
 
   async function loadResults(jobId) {
-    const [summary, surface, defects, geojson, enuGeojson, segments] = await Promise.all([
+    const [summary, surface, defects, geojson, enuGeojson, segments, reviews] = await Promise.all([
       api(`/api/v1/jobs/${jobId}/summary`),
       api(`/api/v1/jobs/${jobId}/surface`),
       api(`/api/v1/jobs/${jobId}/defects`),
       api(`/api/v1/jobs/${jobId}/defects.local.geojson`),
       api(`/api/v1/jobs/${jobId}/defects.enu.geojson`),
-      api(`/api/v1/jobs/${jobId}/segments`)
+      api(`/api/v1/jobs/${jobId}/segments`),
+      api(`/api/v1/jobs/${jobId}/reviews`)
     ]);
-    Object.assign(state, { summary, surface, defects, geojson, enuGeojson, segments, selectedDefect: null });
+    Object.assign(state, { summary, surface, defects, geojson, enuGeojson, segments, reviews, selectedDefect: null });
     $("emptyState").hidden = true;
     $("resultView").hidden = false;
     $("scenarioButton").disabled = false;
@@ -278,7 +280,7 @@
       artifact("summary"), artifact("surface"), artifact("defects"),
       artifact("defects_local_geojson"), artifact("defects_enu_geojson"), artifact("segments")
     ]);
-    Object.assign(state, { summary, surface, defects, geojson, enuGeojson, segments, selectedDefect: null });
+    Object.assign(state, { summary, surface, defects, geojson, enuGeojson, segments, reviews: null, selectedDefect: null });
     $("emptyState").hidden = true;
     $("resultView").hidden = false;
     $("scenarioButton").disabled = true;
@@ -331,7 +333,8 @@
       row.dataset.defectId = defect.defect_id;
       row.tabIndex = 0;
       row.setAttribute("role", "button");
-      row.innerHTML = `<td>${defect.defect_id}</td><td>${defectName(defect.defect_type)}</td><td>${defect.lane_id || defect.road_zone || "unknown"}</td><td>${format(defect.chainage_m, 1)} m</td><td class="severity-${defect.severity}">${defect.severity}</td><td>${defectPrimaryMetric(defect)}</td><td>${format(number(defect.confidence) * 100, 0)}%</td>`;
+      const reviewState = state.reviews?.defects?.[defect.defect_id]?.state || (state.sourceMode === "job" ? "pending" : "N/A");
+      row.innerHTML = `<td>${defect.defect_id}</td><td>${defectName(defect.defect_type)}</td><td>${defect.lane_id || defect.road_zone || "unknown"}</td><td>${format(defect.chainage_m, 1)} m</td><td class="severity-${defect.severity}">${defect.severity}</td><td>${defectPrimaryMetric(defect)}</td><td>${format(number(defect.confidence) * 100, 0)}%</td><td>${reviewState}</td>`;
       row.addEventListener("click", () => selectDefect(defect.defect_id));
       row.addEventListener("keydown", (event) => {
         if (event.key === "Enter" || event.key === " ") selectDefect(defect.defect_id);
@@ -611,12 +614,51 @@
       $("defectDetail").innerHTML = '<span class="muted">지도 또는 아래 표에서 결함을 선택하세요.</span>';
       $("profileChart").innerHTML = "";
       $("longitudinalChart").innerHTML = "";
+      $("reviewControls").hidden = true;
       return;
     }
     $("selectedBadge").textContent = `${defectName(defect.defect_type)} · ${defect.severity}`;
     const flags = (defect.quality_flags || []).length ? defect.quality_flags.join(", ") : "없음";
-    $("defectDetail").innerHTML = `<strong>${defect.defect_id}</strong><p>차로/구역 ${defect.lane_id || defect.road_zone || "unknown"} · 체인리지 ${format(defect.chainage_m, 2)} m · 횡방향 ${format(defect.lateral_offset_m, 2)} m</p><p>측정: ${defectPrimaryMetric(defect)} · 신뢰도 ${format(number(defect.confidence) * 100, 0)}%</p><p class="muted">품질 플래그: ${flags}</p><p class="muted">RGB evidence: N/A — 연결된 frame evidence 없음</p>`;
+    const review = state.reviews?.defects?.[defect.defect_id];
+    $("defectDetail").innerHTML = `<strong>${defect.defect_id}</strong><p>차로/구역 ${defect.lane_id || defect.road_zone || "unknown"} · 체인리지 ${format(defect.chainage_m, 2)} m · 횡방향 ${format(defect.lateral_offset_m, 2)} m</p><p>측정: ${defectPrimaryMetric(defect)} · 신뢰도 ${format(number(defect.confidence) * 100, 0)}%</p><p class="muted">품질 플래그: ${flags}</p><p class="muted">RGB evidence: N/A — 연결된 frame evidence 없음</p><p>검수: <strong>${review?.state || "N/A"}</strong>${review ? ` · version ${review.version}` : ""}</p>`;
+    $("reviewControls").hidden = state.sourceMode !== "job" || !review;
+    $("reviewSeverity").value = review?.current_annotation?.severity || defect.severity || "low";
+    $("reviewStatus").textContent = review ? `raw prediction 보존 · 현재 version ${review.version}` : "";
     renderProfile(defect.chainage_m, defect.lateral_offset_m);
+  }
+
+  async function submitReview() {
+    const defect = state.selectedDefect;
+    const review = defect && state.reviews?.defects?.[defect.defect_id];
+    if (!state.jobId || state.sourceMode !== "job" || !defect || !review) return;
+    const actor = $("reviewActor").value.trim();
+    const reason = $("reviewReason").value.trim();
+    if (!actor || !reason) {
+      $("reviewStatus").textContent = "검수자와 사유를 입력하세요.";
+      return;
+    }
+    const action = $("reviewAction").value;
+    const payload = { actor, action, reason, expected_version: review.version };
+    if (action === "modified") {
+      payload.after = { ...review.current_annotation, severity: $("reviewSeverity").value };
+    }
+    try {
+      $("submitReview").disabled = true;
+      const result = await api(`/api/v1/jobs/${state.jobId}/reviews/${encodeURIComponent(defect.defect_id)}`, {
+        method: "POST",
+        body: JSON.stringify(payload)
+      });
+      state.reviews.defects[defect.defect_id] = result.record;
+      state.reviews.events.push(result.event);
+      $("reviewReason").value = "";
+      renderDefectTable();
+      renderDefectDetail();
+      $("reviewStatus").textContent = `${result.event.action} 저장 · version ${result.record.version}`;
+    } catch (error) {
+      $("reviewStatus").textContent = `저장 실패: ${error.message}`;
+    } finally {
+      $("submitReview").disabled = false;
+    }
   }
 
   function renderProfile(chainage, lateralOffset) {
@@ -748,6 +790,10 @@
   });
   $("runButton").addEventListener("click", () => createJob(false));
   $("scenarioButton").addEventListener("click", calculateScenario);
+  $("submitReview").addEventListener("click", submitReview);
+  $("reviewAction").addEventListener("change", (event) => {
+    $("reviewSeverityLabel").hidden = event.target.value !== "modified";
+  });
   $("surfaceCanvas").addEventListener("click", selectFromCanvas);
   ["showResidual", "showRoi", "showPotholes", "showRutting", "showBumps", "showAdvanced", "showLowConfidence", "showLowCoverage"].forEach((id) => $(id).addEventListener("change", () => {
     renderDefectTable(); renderCurrentView();

@@ -12,6 +12,7 @@ RUN python -m pip install --upgrade pip \
     && python -m pip install -r /tmp/requirements.txt
 
 COPY road_condition_core /app/road_condition_core
+COPY scoring_profiles /app/scoring_profiles
 COPY services/road_condition_api/app /app/app
 
 RUN useradd --create-home --uid 10001 appuser \

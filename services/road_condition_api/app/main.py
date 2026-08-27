@@ -25,9 +25,10 @@ from road_condition_core.pipeline import (
     write_analysis_products,
 )
 from road_condition_core.roi import load_road_roi, resolve_roi_path
+from road_condition_core.scoring import load_scoring_profile, merge_profile_config
 from road_condition_core.synthetic import generate_synthetic_scene
 
-from .schemas import CreateJobRequest, ScenarioRequest
+from .schemas import CreateJobRequest, ReviewRequest, ScenarioRequest
 from .route_view import read_route_manifest, read_route_tile_artifact
 from .store import JobStore
 
@@ -38,6 +39,7 @@ class Settings:
     workspace_root: Path
     max_workers: int = 1
     cors_origins: tuple[str, ...] = ("http://localhost:8080", "http://127.0.0.1:8080")
+    scoring_profiles_root: Path = Path("scoring_profiles")
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -54,6 +56,9 @@ class Settings:
             workspace_root=Path(os.getenv("ROAD_CONDITION_WORKSPACE_ROOT", "artifacts")),
             max_workers=max(1, int(os.getenv("ROAD_CONDITION_MAX_WORKERS", "1"))),
             cors_origins=origins,
+            scoring_profiles_root=Path(
+                os.getenv("ROAD_CONDITION_SCORING_PROFILES_ROOT", "scoring_profiles")
+            ),
         )
 
 
@@ -86,7 +91,18 @@ def _run_job(
             message="loading source data",
         )
         request = CreateJobRequest.model_validate(request_payload)
-        config = AnalysisConfig.from_overrides(request.config)
+        scoring_profile = load_scoring_profile(
+            settings.scoring_profiles_root,
+            request.scoring_profile_id,
+        )
+        profile_overrides, custom_profile_override = merge_profile_config(
+            scoring_profile,
+            request.config,
+        )
+        config = AnalysisConfig.from_overrides(profile_overrides)
+        profile_contract = scoring_profile.summary_contract(
+            custom_override_applied=custom_profile_override
+        )
         if request.source_type == "synthetic":
             scene = generate_synthetic_scene(request.synthetic_profile)
             points = scene.points_enu_m
@@ -175,6 +191,7 @@ def _run_job(
             pose_context=pose_context,
             quality_context=quality_context,
             road_roi=road_roi,
+            scoring_profile_contract=profile_contract,
         )
         store.update_status(
             job_id,
@@ -207,6 +224,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     resolved_settings = settings or Settings.from_env()
     resolved_settings.data_root.mkdir(parents=True, exist_ok=True)
     resolved_settings.workspace_root.mkdir(parents=True, exist_ok=True)
+    default_scoring_profile = load_scoring_profile(
+        resolved_settings.scoring_profiles_root,
+        "internal-geometry-mvp-v1",
+    )
     store = JobStore(resolved_settings.data_root)
     executor = ThreadPoolExecutor(
         max_workers=resolved_settings.max_workers,
@@ -302,7 +323,26 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 },
                 "route_loading": "manifest_then_one_selected_tile_json",
                 "full_point_cloud_to_browser": False,
-                "review_mutation": "planned_stage_10",
+                "review_mutation": "manual_api_enabled",
+            },
+            "scoring_profiles": {
+                "default": default_scoring_profile.summary_contract(
+                    custom_override_applied=False
+                ),
+                "standard_naming_guard": "validated_standard approval required",
+                "automatic_approval_enabled": False,
+            },
+            "review_workflow": {
+                "states": [
+                    "pending",
+                    "accepted",
+                    "modified",
+                    "rejected",
+                    "needs_recollection",
+                ],
+                "raw_prediction_immutable": True,
+                "optimistic_versioning": True,
+                "authentication": "not_implemented_actor_is_audit_label_only",
             },
             "report_v2": {
                 "profile": "internal_korean_geometry_evidence_v2",
@@ -345,6 +385,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 "advanced_geometry_screening",
                 "report_v2_evidence_package",
                 "rgb_crack_contract_and_holdout_gate",
+                "versioned_scoring_profile",
+                "manual_review_audit_bundle",
             ],
             "planned_outputs": [
                 "rgb_cracks",
@@ -445,6 +487,49 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.get("/api/v1/jobs/{job_id}/defects")
     def get_defects(job_id: str, request: Request) -> Any:
         return result_json(job_id, "defects.json", request)
+
+    @app.get("/api/v1/jobs/{job_id}/reviews")
+    def get_reviews(job_id: str, request: Request) -> dict[str, Any]:
+        try:
+            status = get_store(request).read_status(job_id)
+            if status.get("state") != "completed":
+                raise HTTPException(status_code=409, detail="job is not completed")
+            return get_store(request).read_reviews(job_id)
+        except HTTPException:
+            raise
+        except RuntimeError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except (ValueError, FileNotFoundError, json.JSONDecodeError) as exc:
+            raise HTTPException(status_code=404, detail="review data not found") from exc
+
+    @app.post("/api/v1/jobs/{job_id}/reviews/{defect_id}")
+    def review_defect(
+        job_id: str,
+        defect_id: str,
+        payload: ReviewRequest,
+        request: Request,
+    ) -> dict[str, Any]:
+        try:
+            status = get_store(request).read_status(job_id)
+            if status.get("state") != "completed":
+                raise HTTPException(status_code=409, detail="job is not completed")
+            return get_store(request).apply_review(
+                job_id,
+                defect_id,
+                actor=payload.actor,
+                action=payload.action,
+                reason=payload.reason,
+                expected_version=payload.expected_version,
+                after=payload.after,
+            )
+        except HTTPException:
+            raise
+        except RuntimeError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=404, detail="defect not found") from exc
+        except (ValueError, json.JSONDecodeError) as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     @app.get("/api/v1/jobs/{job_id}/defects.local.geojson")
     def get_local_geojson(job_id: str, request: Request) -> Any:

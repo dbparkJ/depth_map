@@ -1,0 +1,33 @@
+profile_id: internal-geometry-mvp-v1
+version: 1.0.0
+source_document: null
+effective_date: null
+distress_types:
+  - pothole
+  - rutting
+  - bump
+  - roughness_proxy
+severity_thresholds:
+  status: experimental
+  source: synthetic_demo_defaults
+density_calculation:
+  pothole: pothole_area_m2 / valid_surface_area_m2
+  rutting: maximum wheel-path depth
+  bump: candidate count
+  roughness: project-specific wheel-path RMS proxy
+weights_deduct_rules:
+  algorithm: internal_geometry_mvp_v1
+  score_config:
+    pothole_weight: 0.45
+    rutting_weight: 0.30
+    bump_weight: 0.10
+    roughness_weight: 0.15
+    high_pothole_depth_m: 0.080
+    high_rut_depth_m: 0.040
+    roughness_reference_m: 0.025
+missing_metric_policy: N/A_and_manual_review
+approval_status: experimental
+standard_naming_allowed: false
+segment_length_m: 20.0
+lane_evaluation: when_roi_available
+automatic_approval_confidence_threshold: null

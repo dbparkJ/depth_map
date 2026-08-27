@@ -426,8 +426,8 @@ VWorld/Cesium은 runtime key/token과 WGS84 변환이 설정되지 않은 현재
 fallback한다.
 
 키보드로 결함 표 행을 선택하려면 Enter/Space를 사용하고, 뷰어에 focus한 뒤 N/P로 다음/이전
-결함을 이동한다. 실패 tile은 manifest에 보이지만 완료 산출물처럼 열리지 않는다. 작업자
-수정·승인은 Stage 10 API와 함께 추가되므로 현재 뷰어는 read-only다.
+결함을 이동한다. 실패 tile은 manifest에 보이지만 완료 산출물처럼 열리지 않는다. route tile은
+read-only이고, 완료 단일 job은 Stage 10 검수 panel에서 별도 audit event로 판정한다.
 
 ## 17. Stage 08 보고서 v2 재생성
 
@@ -489,3 +489,42 @@ docker run --rm --network none \
 
 metric 정의는 고정됐지만 acceptance threshold는 아직 `N/A`이며 자동 승인은 비활성화다. 이
 contract image는 운영 service가 아니므로 현재 2-service Compose에는 넣지 않는다.
+
+## 19. Stage 10 점수 profile과 수동 검수
+
+새 작업은 기본 `internal-geometry-mvp-v1` profile을 사용한다. 이는 기존 계산을 재현하는 내부
+실험 profile이며 기관 표준이 아니다.
+
+```json
+{
+  "source_type": "synthetic",
+  "synthetic_profile": "mixed",
+  "scoring_profile_id": "internal-geometry-mvp-v1"
+}
+```
+
+summary와 report에서 profile ID/version/hash/승인 상태를 확인할 수 있다. API config에서 score
+weight나 구간 길이를 덮어쓰면 `custom_override_applied=true`가 기록된다.
+
+완료 job의 raw defect와 검수 상태를 조회한다.
+
+```text
+GET /api/v1/jobs/{job_id}/defects
+GET /api/v1/jobs/{job_id}/reviews
+```
+
+승인·거절·재수집은 `after` 없이, 수정은 원 defect 전체를 복사한 `after`와 함께 전송한다.
+
+```json
+POST /api/v1/jobs/{job_id}/reviews/{defect_id}
+{
+  "actor": "local-reviewer",
+  "action": "accepted",
+  "reason": "geometry evidence checked",
+  "expected_version": 0
+}
+```
+
+동시에 열린 화면의 stale version은 409로 거부된다. 웹은 최신 version을 표시하고 심각도 수정도
+같은 endpoint에 기록한다. `defects.json`은 절대 덮어쓰지 않는다. 현재 로그인/권한이 없으므로
+actor 문자열은 신원이 검증된 계정이 아니라 audit label이다.

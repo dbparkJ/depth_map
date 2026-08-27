@@ -167,9 +167,10 @@ GPU 환경은 모두 `unknown`이다. 합성 확률맵은 계약 검증에만 �
 
 ### P2: 업무 시스템
 
-- [ ] scoring profile YAML
-- [ ] 작업자 승인·수정·거절
-- [ ] audit log
+- [x] version/hash/승인 상태를 갖는 internal scoring profile YAML
+- [x] 완료 job 작업자 승인·심각도 수정·거절·재수집 UI/API
+- [x] raw prediction 불변 SHA와 before/after/version audit bundle
+- [~] actor는 인증 신원이 아닌 audit label; 관리자 2단계 승인 전
 - [ ] 보수공법 catalog
 - [ ] 실제 단가 version
 - [ ] 예산 최적화

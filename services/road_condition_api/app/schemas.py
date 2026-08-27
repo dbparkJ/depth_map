@@ -13,6 +13,10 @@ class CreateJobRequest(BaseModel):
     mapping_output_path: str | None = None
     road_roi_path: str | None = None
     point_cloud_stage: Literal["raw", "clean", "removed"] = "raw"
+    scoring_profile_id: str = Field(
+        default="internal-geometry-mvp-v1",
+        pattern=r"^[a-z0-9][a-z0-9._-]{0,63}$",
+    )
     config: dict[str, Any] = Field(default_factory=dict)
 
     @model_validator(mode="after")
@@ -34,3 +38,26 @@ class ScenarioRequest(BaseModel):
     )
     unit_prices: dict[str, float] = Field(default_factory=dict)
     rainfall_mm: float = Field(default=30.0, ge=0.0, le=1000.0)
+
+
+class ReviewRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    actor: str = Field(min_length=1, max_length=128)
+    action: Literal[
+        "accepted",
+        "modified",
+        "rejected",
+        "needs_recollection",
+    ]
+    reason: str = Field(min_length=1, max_length=2000)
+    expected_version: int = Field(ge=0)
+    after: dict[str, Any] | None = None
+
+    @model_validator(mode="after")
+    def validate_after(self) -> "ReviewRequest":
+        if self.action == "modified" and self.after is None:
+            raise ValueError("modified review requires after")
+        if self.action != "modified" and self.after is not None:
+            raise ValueError("after is only valid for modified review")
+        return self

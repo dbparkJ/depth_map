@@ -18,6 +18,7 @@ def render_html_report(summary: dict[str, Any], defects: list[dict[str, Any]], s
     results = summary.get("results") or {}
     scores = summary.get("scores") or {}
     quality = summary.get("quality") or {}
+    profile = summary.get("scoring_profile") or {}
 
     defect_rows = []
     for defect in defects:
@@ -86,6 +87,7 @@ small{{color:#627d98}}
   <small>ROAD CONDITION GEOMETRY MVP</small>
   <h1>도로 상태 자동 분석 리포트</h1>
   <p>소스: {html.escape(str(source.get('type', '-')))} / 알고리즘: {html.escape(str(summary.get('algorithm_version', '-')))}</p>
+  <p>점수 profile: {html.escape(str(profile.get('profile_id', 'N/A')))}@{html.escape(str(profile.get('profile_version', 'N/A')))} / 승인: {html.escape(str(profile.get('approval_status', 'N/A')))}</p>
 </header>
 <div class="grid">
   <div class="card">형상 점수<strong>{_fmt(scores.get('geometry_score'), 1)}</strong><span class="badge">{html.escape(str(scores.get('grade', '-')))}</span></div>

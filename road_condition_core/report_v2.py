@@ -101,11 +101,16 @@ def _summary_rows(summary: Mapping[str, Any], config_hash: str) -> list[list[Any
     scores = summary.get("scores") or {}
     coverage = summary.get("coverage") or {}
     quality = summary.get("quality") or {}
+    profile = summary.get("scoring_profile") or {}
     return [
         ["algorithm_version", _na(summary.get("algorithm_version")), ""],
         ["config_sha256", config_hash, ""],
         ["dataset_id", _na(source.get("dataset_id")), ""],
         ["mapping_commit_sha", _na(source.get("mapping_commit_sha")), ""],
+        ["scoring_profile_id", _na(profile.get("profile_id")), ""],
+        ["scoring_profile_version", _na(profile.get("profile_version")), ""],
+        ["scoring_profile_sha256", _na(profile.get("profile_sha256")), ""],
+        ["scoring_profile_approval", _na(profile.get("approval_status")), ""],
         ["internal_geometry_score", _na(scores.get("geometry_score")), "point"],
         ["grade", _na(scores.get("grade")), ""],
         ["pothole_count", _na(results.get("pothole_count")), "count"],
@@ -345,6 +350,7 @@ def _render_html(
     scores = summary.get("scores") or {}
     results = summary.get("results") or {}
     coverage = summary.get("coverage") or {}
+    profile = summary.get("scoring_profile") or {}
     low_confidence = [item for item in defects if _low_confidence(item)]
     segment_rows = "".join(
         "<tr>"
@@ -386,7 +392,7 @@ table{{width:100%;border-collapse:collapse}}th,td{{padding:8px;border-bottom:1px
 <section class="grid"><div class="card">내부 형상 점수<strong data-json-path="scores.geometry_score">{_fmt(scores.get('geometry_score'), 1)}</strong></div>
 <div class="card">등급<strong>{html.escape(str(_na(scores.get('grade'))))}</strong></div><div class="card">포트홀<strong data-json-path="results.pothole_count">{_fmt(results.get('pothole_count'), 0)}</strong></div>
 <div class="card">커버리지<strong data-json-path="coverage.valid_coverage_ratio">{_percent(coverage.get('valid_coverage_ratio'), 1)}</strong></div></section>
-<section><h2>추적 정보</h2><div class="meta">algorithm={html.escape(str(_na(summary.get('algorithm_version'))))}<br>config_sha256={config_hash}<br>mapping_commit={html.escape(str(_na(source.get('mapping_commit_sha'))))}<br>dataset_id={html.escape(str(_na(source.get('dataset_id'))))}<br>source_json_sha256={source_hash}</div></section>
+<section><h2>추적 정보</h2><div class="meta">algorithm={html.escape(str(_na(summary.get('algorithm_version'))))}<br>config_sha256={config_hash}<br>mapping_commit={html.escape(str(_na(source.get('mapping_commit_sha'))))}<br>dataset_id={html.escape(str(_na(source.get('dataset_id'))))}<br>scoring_profile={html.escape(str(_na(profile.get('profile_id'))))}@{html.escape(str(_na(profile.get('profile_version'))))}<br>scoring_profile_approval={html.escape(str(_na(profile.get('approval_status'))))}<br>scoring_profile_sha256={html.escape(str(_na(profile.get('profile_sha256'))))}<br>source_json_sha256={source_hash}</div></section>
 <section><h2>Residual overview</h2><img class="overview" src="figures/residual_overview.png" alt="residual overview" onerror="this.replaceWith(document.createTextNode('N/A — residual overview missing'))"></section>
 <section><h2>구간</h2><table><thead><tr><th>ID</th><th>체인리지</th><th>커버리지</th><th>점수</th><th>등급</th></tr></thead><tbody>{segment_rows or '<tr><td colspan="5">N/A</td></tr>'}</tbody></table></section>
 <section><h2>결함</h2><table><thead><tr><th>ID</th><th>종류</th><th>체인리지</th><th>metric</th><th>신뢰도</th></tr></thead><tbody>{defect_rows or '<tr><td colspan="5">검출 결함 없음</td></tr>'}</tbody></table></section>
@@ -443,6 +449,7 @@ def generate_report_bundle(
         "source_json_sha256": source_hash,
         "dataset_id": (summary.get("source") or {}).get("dataset_id"),
         "mapping_commit_sha": (summary.get("source") or {}).get("mapping_commit_sha"),
+        "scoring_profile": summary.get("scoring_profile"),
         "defect_count": len(defects),
         "segment_count": len(segments),
         "low_confidence_defect_count": sum(_low_confidence(item) for item in defects),

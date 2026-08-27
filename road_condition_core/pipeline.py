@@ -31,6 +31,20 @@ from .roi import ZONE_TYPE_CODES, RoadRoi, classify_st
 
 
 ALGORITHM_VERSION = "road-condition-geometry-mvp-2"
+DEFAULT_SCORING_PROFILE_CONTRACT = {
+    "profile_id": "internal-geometry-mvp-v1",
+    "profile_version": "1.0.0",
+    "profile_sha256": None,
+    "source_document": None,
+    "effective_date": None,
+    "approval_status": "experimental",
+    "standard_naming_allowed": False,
+    "missing_metric_policy": "N/A_and_manual_review",
+    "segment_length_m": 20.0,
+    "lane_evaluation": "when_roi_available",
+    "automatic_approval_confidence_threshold": None,
+    "custom_override_applied": False,
+}
 
 
 def _grade(score: float) -> str:
@@ -340,9 +354,20 @@ def analyze_points(
     pose_context: Mapping[str, np.ndarray] | None = None,
     quality_context: Mapping[str, Any] | None = None,
     road_roi: RoadRoi | None = None,
+    scoring_profile_contract: Mapping[str, Any] | None = None,
 ) -> AnalysisProducts:
     resolved_config = config or AnalysisConfig()
     resolved_config.validate()
+    profile_contract = dict(
+        scoring_profile_contract or DEFAULT_SCORING_PROFILE_CONTRACT
+    )
+    lane_evaluation = profile_contract.get("lane_evaluation", "when_roi_available")
+    if lane_evaluation not in {"when_roi_available", "disabled", "required"}:
+        raise ValueError("invalid scoring profile lane_evaluation")
+    if lane_evaluation == "required" and (
+        road_roi is None or not road_roi.lane_ids
+    ):
+        raise ValueError("scoring profile requires lane ROI evaluation")
     points = np.asarray(points_enu_m)
     colors = np.asarray(colors_rgb)
     if points.ndim != 2 or points.shape[1:] != (3,):
@@ -550,7 +575,7 @@ def analyze_points(
         resolved_config,
         road_zone="road" if road_roi is not None else "corridor_fallback",
     )
-    if grid_lane_id is not None:
+    if grid_lane_id is not None and lane_evaluation != "disabled":
         for lane_id in road_roi.lane_ids if road_roi is not None else ():
             segments.extend(
                 _segment_metrics(
@@ -633,6 +658,7 @@ def analyze_points(
             "overall_score": float(score),
             "score_profile": "internal_geometry_mvp_v1",
         },
+        "scoring_profile": profile_contract,
         "limitations": [
             "This MVP analyzes geometry only; crack, patching, raveling, and bleeding require an RGB model.",
             "The roughness value is a project-specific proxy and must not be reported as standardized IRI.",

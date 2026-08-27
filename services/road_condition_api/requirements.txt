@@ -5,3 +5,4 @@ numpy>=2.0,<3
 scipy>=1.13,<2
 pyarrow>=17,<24
 Pillow>=10,<13
+PyYAML>=6,<7

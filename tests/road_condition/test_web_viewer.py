@@ -24,6 +24,11 @@ def test_web_viewer_has_progressive_route_and_accessibility_contract() -> None:
         "minimumConfidence",
         "compareJob",
         "renderRecovery",
+        "reviewControls",
+        "reviewActor",
+        "reviewAction",
+        "reviewReason",
+        "submitReview",
     ):
         assert f'id="{element_id}"' in html
     assert 'tabindex="0"' in html
@@ -32,6 +37,9 @@ def test_web_viewer_has_progressive_route_and_accessibility_contract() -> None:
     assert "route-datasets/tile" in script
     assert "webglcontextlost" in script
     assert "전체 PLY 미로딩" in script
+    assert "/reviews/" in script
+    assert "expected_version" in script
+    assert "raw prediction 보존" in script
     assert "COPY services/road_condition_web/viewer_core.js" in dockerfile
 
 

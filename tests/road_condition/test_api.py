@@ -58,6 +58,53 @@ def test_health_and_synthetic_job(tmp_path) -> None:
         summary = client.get(f"/api/v1/jobs/{job_id}/summary")
         assert summary.status_code == 200
         assert summary.json()["results"]["pothole_count"] >= 1
+        assert summary.json()["scoring_profile"]["profile_version"] == "1.0.0"
+        assert summary.json()["scoring_profile"]["approval_status"] == "experimental"
+        raw_defects = client.get(f"/api/v1/jobs/{job_id}/defects").json()
+        reviews = client.get(f"/api/v1/jobs/{job_id}/reviews")
+        assert reviews.status_code == 200
+        review_bundle = reviews.json()
+        assert review_bundle["automatic_approval_enabled"] is False
+        assert review_bundle["scoring_profile"]["profile_version"] == "1.0.0"
+        defect_id = raw_defects[0]["defect_id"]
+        accepted = client.post(
+            f"/api/v1/jobs/{job_id}/reviews/{defect_id}",
+            json={
+                "actor": "fixture-reviewer",
+                "action": "accepted",
+                "reason": "geometry evidence checked",
+                "expected_version": 0,
+            },
+        )
+        assert accepted.status_code == 200
+        assert accepted.json()["record"]["state"] == "accepted"
+        conflict = client.post(
+            f"/api/v1/jobs/{job_id}/reviews/{defect_id}",
+            json={
+                "actor": "fixture-reviewer",
+                "action": "rejected",
+                "reason": "stale browser tab",
+                "expected_version": 0,
+            },
+        )
+        assert conflict.status_code == 409
+        corrected = dict(raw_defects[0])
+        corrected["severity"] = "reviewed-fixture"
+        modified = client.post(
+            f"/api/v1/jobs/{job_id}/reviews/{defect_id}",
+            json={
+                "actor": "fixture-reviewer",
+                "action": "modified",
+                "reason": "severity corrected from evidence",
+                "expected_version": 1,
+                "after": corrected,
+            },
+        )
+        assert modified.status_code == 200
+        assert modified.json()["record"]["state"] == "modified"
+        assert modified.json()["event"]["before"] == raw_defects[0]
+        assert modified.json()["event"]["after"]["severity"] == "reviewed-fixture"
+        assert client.get(f"/api/v1/jobs/{job_id}/defects").json() == raw_defects
         report = client.get(f"/api/v1/jobs/{job_id}/report")
         assert report.status_code == 200
         assert "INTERNAL ROAD GEOMETRY EVIDENCE" in report.text

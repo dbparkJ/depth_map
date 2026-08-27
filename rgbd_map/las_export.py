@@ -5,7 +5,7 @@ import math
 import os
 import shutil
 import subprocess
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -22,6 +22,38 @@ STAGE_FILENAMES = {
 
 
 @dataclass(frozen=True)
+class GroundFilterConfig:
+    cell_m: float = 0.50
+    scalar: float = 1.20
+    slope: float = 0.15
+    threshold_m: float = 0.20
+    window_m: float = 8.0
+    elm_cell_m: float = 0.30
+    elm_threshold_m: float = 0.20
+
+    def __post_init__(self) -> None:
+        values = {
+            "cell_m": self.cell_m,
+            "scalar": self.scalar,
+            "slope": self.slope,
+            "threshold_m": self.threshold_m,
+            "window_m": self.window_m,
+            "elm_cell_m": self.elm_cell_m,
+            "elm_threshold_m": self.elm_threshold_m,
+        }
+        invalid = [
+            name
+            for name, value in values.items()
+            if not math.isfinite(value) or value <= 0
+        ]
+        if invalid:
+            raise ValueError(
+                "ground filter parameters must be positive finite numbers: "
+                + ", ".join(invalid)
+            )
+
+
+@dataclass(frozen=True)
 class LasExportPlan:
     input_ply: Path
     output_las: Path
@@ -33,6 +65,7 @@ class LasExportPlan:
     target_crs: CRS
     scale_m: float
     offset_xyz: tuple[float, float, float]
+    ground_filter: GroundFilterConfig | None
 
 
 def infer_utm_crs(longitude_deg: float, latitude_deg: float) -> CRS:
@@ -83,6 +116,7 @@ def make_export_plan(
     output_las: str | Path | None = None,
     target_crs: str | CRS | None = None,
     scale_m: float = 0.001,
+    ground_filter: GroundFilterConfig | None = None,
 ) -> LasExportPlan:
     output_path = Path(output_dir).expanduser().resolve()
     if stage not in STAGE_FILENAMES:
@@ -114,7 +148,12 @@ def make_export_plan(
     target = (
         Path(output_las).expanduser().resolve()
         if output_las is not None
-        else data_dir / f"cloud_{stage}_epsg{crs.to_epsg() or 'custom'}.las"
+        else data_dir
+        / (
+            f"cloud_{stage}_ground_epsg{crs.to_epsg() or 'custom'}.las"
+            if ground_filter is not None
+            else f"cloud_{stage}_epsg{crs.to_epsg() or 'custom'}.las"
+        )
     )
     pipeline_json = target.with_suffix(".pdal.json")
     report_json = target.with_suffix(".report.json")
@@ -136,29 +175,55 @@ def make_export_plan(
         target_crs=crs,
         scale_m=scale_m,
         offset_xyz=(float(offset[0]), float(offset[1]), float(offset[2])),
+        ground_filter=ground_filter,
     )
 
 
 def make_pdal_las_pipeline(plan: LasExportPlan) -> dict[str, Any]:
-    """Build a streamable ENU -> ECEF -> projected LAS pipeline."""
+    """Build an ENU -> ECEF -> projected LAS pipeline."""
 
     matrix = plan.origin.enu_to_ecef_affine_matrix()
     matrix_text = " ".join(f"{value:.17g}" for value in matrix.ravel())
     target_srs = plan.target_crs.to_string()
-    return {
-        "pipeline": [
-            {"type": "readers.ply", "filename": str(plan.input_ply)},
-            {
-                "type": "filters.transformation",
-                "matrix": matrix_text,
-                "override_srs": "EPSG:4978",
-            },
-            {
-                "type": "filters.reprojection",
-                "in_srs": "EPSG:4978",
-                "out_srs": target_srs,
-                "error_on_failure": True,
-            },
+    stages: list[dict[str, Any]] = [
+        {"type": "readers.ply", "filename": str(plan.input_ply)},
+        {
+            "type": "filters.transformation",
+            "matrix": matrix_text,
+            "override_srs": "EPSG:4978",
+        },
+        {
+            "type": "filters.reprojection",
+            "in_srs": "EPSG:4978",
+            "out_srs": target_srs,
+            "error_on_failure": True,
+        },
+    ]
+    if plan.ground_filter is not None:
+        config = plan.ground_filter
+        stages.extend(
+            [
+                {"type": "filters.assign", "assignment": "Classification[:]=0"},
+                {
+                    "type": "filters.elm",
+                    "cell": config.elm_cell_m,
+                    "threshold": config.elm_threshold_m,
+                },
+                {
+                    "type": "filters.smrf",
+                    "where": "Classification != 7",
+                    "cell": config.cell_m,
+                    "scalar": config.scalar,
+                    "slope": config.slope,
+                    "threshold": config.threshold_m,
+                    "window": config.window_m,
+                    "ground_class": 2,
+                    "other_class": 1,
+                },
+                {"type": "filters.expression", "expression": "Classification == 2"},
+            ]
+        )
+    stages.append(
             {
                 "type": "writers.las",
                 "filename": str(plan.output_las),
@@ -173,9 +238,9 @@ def make_pdal_las_pipeline(plan: LasExportPlan) -> dict[str, Any]:
                 "offset_y": plan.offset_xyz[1],
                 "offset_z": plan.offset_xyz[2],
                 "enhanced_srs_vlrs": True,
-            },
-        ]
-    }
+            }
+    )
+    return {"pipeline": stages}
 
 
 def _run_json(command: list[str]) -> dict[str, Any]:
@@ -207,26 +272,39 @@ def export_las(
     plan.pipeline_json.write_text(
         json.dumps(pipeline, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
     )
+    temporary_las = plan.output_las.with_name(
+        plan.output_las.stem + ".tmp" + plan.output_las.suffix
+    )
+    temporary_las.unlink(missing_ok=True)
+    execution_plan = replace(plan, output_las=temporary_las)
+    execution_pipeline = make_pdal_las_pipeline(execution_plan)
     try:
+        execution_mode = "--nostream" if plan.ground_filter is not None else "--stream"
         subprocess.run(
-            [pdal_path, "pipeline", "--stream", str(plan.pipeline_json)], check=True
+            [pdal_path, "pipeline", execution_mode, "--stdin"],
+            check=True,
+            input=json.dumps(execution_pipeline),
+            text=True,
         )
-        summary = _run_json([pdal_path, "info", "--summary", str(plan.output_las)])
-        metadata = _run_json([pdal_path, "info", "--metadata", str(plan.output_las)])
+        summary = _run_json([pdal_path, "info", "--summary", str(temporary_las)])
+        metadata = _run_json([pdal_path, "info", "--metadata", str(temporary_las)])
     except Exception:
-        # A failed writer can leave a valid-looking but incomplete LAS file.
-        if plan.output_las.exists():
-            plan.output_las.unlink()
+        temporary_las.unlink(missing_ok=True)
         raise
 
     las_summary = summary.get("summary", {})
     las_metadata = metadata.get("metadata", {})
     output_count = int(las_summary.get("num_points", -1))
-    if output_count != plan.source_point_count:
-        plan.output_las.unlink(missing_ok=True)
+    expected_count = output_count == plan.source_point_count
+    valid_ground_count = (
+        plan.ground_filter is not None and 0 < output_count <= plan.source_point_count
+    )
+    if not expected_count and not valid_ground_count:
+        temporary_las.unlink(missing_ok=True)
         raise RuntimeError(
             f"LAS point count mismatch: source={plan.source_point_count}, output={output_count}"
         )
+    os.replace(temporary_las, plan.output_las)
 
     report: dict[str, Any] = {
         "input_ply": str(plan.input_ply),
@@ -234,6 +312,8 @@ def export_las(
         "stage": plan.stage,
         "source_point_count": plan.source_point_count,
         "output_point_count": output_count,
+        "removed_point_count": plan.source_point_count - output_count,
+        "retention_ratio": output_count / plan.source_point_count,
         "output_size_bytes": plan.output_las.stat().st_size,
         "source_coordinates": "local ENU metres",
         "target_crs": plan.target_crs.to_string(),
@@ -272,6 +352,22 @@ def export_las(
             )
         },
         "crs_wkt_embedded": bool(las_metadata.get("spatialreference")),
+        "ground_only": plan.ground_filter is not None,
+        "ground_filter": (
+            {
+                "method": "PDAL ELM low-noise rejection followed by SMRF",
+                "classification": 2,
+                "cell_m": plan.ground_filter.cell_m,
+                "scalar": plan.ground_filter.scalar,
+                "slope": plan.ground_filter.slope,
+                "threshold_m": plan.ground_filter.threshold_m,
+                "window_m": plan.ground_filter.window_m,
+                "elm_cell_m": plan.ground_filter.elm_cell_m,
+                "elm_threshold_m": plan.ground_filter.elm_threshold_m,
+            }
+            if plan.ground_filter is not None
+            else None
+        ),
         "pipeline_json": str(plan.pipeline_json),
     }
     temporary = plan.report_json.with_suffix(plan.report_json.suffix + ".tmp")

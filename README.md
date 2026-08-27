@@ -382,6 +382,22 @@ conda run --no-capture-output -n depth-map-postprocess \
 `--stage raw|removed`, `--target-crs`, `--las`, `--scale-m`으로 입력 단계와 출력을 바꿀
 수 있습니다. 기존 LAS를 명시적으로 교체할 때만 `--overwrite`를 사용하십시오.
 
+건물·수목·차량·부유점을 제외하고 지면만 LAS로 만들려면 `--ground-only`를 추가합니다.
+ELM으로 낮은 고립 노이즈를 먼저 제외하고 SMRF가 지면을 `Classification=2`로 분류한
+뒤 해당 점만 기록합니다. 결과 파일명에는 `_ground_`가 붙으므로 전체 LAS를 덮어쓰지
+않습니다.
+
+```bash
+conda run --no-capture-output -n depth-map-postprocess \
+  python convert_cloud_to_las.py \
+  --output artifacts/ultra_density_map_60sec_chunk_0000_temporal_v1 \
+  --stage clean --ground-only
+```
+
+기본값은 `--ground-cell-m 0.50`, `--ground-scalar 1.20`, `--ground-slope 0.15`,
+`--ground-threshold-m 0.20`, `--ground-window-m 8.0`입니다. 지면 누락이 많으면
+`--ground-threshold-m`을 조금 높이고, 비지면이 많이 남으면 낮춰 조정합니다.
+
 통계가 비정상적으로 작다면 `sampled_frame_count`와 `decoded_frame_count`를 먼저 보고,
 그다음 `candidate_pixel_sample_count`, `valid_depth_sample_count_before_voxel`,
 `discarded_by_per_frame_cap`, `discarded_by_voxel`, `discarded_by_final_cap` 순서로 어느

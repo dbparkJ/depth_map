@@ -6,6 +6,7 @@ from pyproj import Transformer
 
 from rgbd_map.geodesy import LocalENU
 from rgbd_map.las_export import (
+    GroundFilterConfig,
     infer_utm_crs,
     make_export_plan,
     make_pdal_las_pipeline,
@@ -70,3 +71,31 @@ def test_read_ply_vertex_count_and_pipeline(tmp_path):
     projected = Transformer.from_crs("EPSG:4979", "EPSG:32652", always_xy=True)
     expected = projected.transform(126.84949888910248, 37.717401871308695, 44.5)
     np.testing.assert_allclose(plan.offset_xyz, expected, atol=1e-9)
+
+
+def test_ground_only_pipeline_classifies_and_selects_ground(tmp_path):
+    bundle = tmp_path / "result"
+    _write_bundle(bundle)
+    config = GroundFilterConfig(
+        cell_m=0.6, scalar=1.3, slope=0.2, threshold_m=0.25, window_m=10.0
+    )
+    plan = make_export_plan(bundle, ground_filter=config)
+    assert plan.output_las.name == "cloud_clean_ground_epsg32652.las"
+
+    pipeline = make_pdal_las_pipeline(plan)["pipeline"]
+    types = [stage["type"] for stage in pipeline]
+    assert types == [
+        "readers.ply",
+        "filters.transformation",
+        "filters.reprojection",
+        "filters.assign",
+        "filters.elm",
+        "filters.smrf",
+        "filters.expression",
+        "writers.las",
+    ]
+    assert pipeline[3]["assignment"] == "Classification[:]=0"
+    smrf = pipeline[5]
+    assert smrf["cell"] == 0.6
+    assert smrf["threshold"] == 0.25
+    assert pipeline[6]["expression"] == "Classification == 2"

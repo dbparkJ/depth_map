@@ -396,7 +396,9 @@ conda run --no-capture-output -n depth-map-postprocess \
 
 기본값은 `--ground-cell-m 0.50`, `--ground-scalar 1.20`, `--ground-slope 0.15`,
 `--ground-threshold-m 0.20`, `--ground-window-m 8.0`입니다. 지면 누락이 많으면
-`--ground-threshold-m`을 조금 높이고, 비지면이 많이 남으면 낮춰 조정합니다.
+`--ground-threshold-m`을 조금 높이고, 비지면이 많이 남으면 낮춰 조정합니다. 일반 LAS
+변환은 streaming이지만 SMRF 지면 추출은 전체 점군 이웃 연산이므로 입력이 클수록 실행
+메모리가 더 필요합니다.
 
 통계가 비정상적으로 작다면 `sampled_frame_count`와 `decoded_frame_count`를 먼저 보고,
 그다음 `candidate_pixel_sample_count`, `valid_depth_sample_count_before_voxel`,
@@ -421,6 +423,7 @@ IMU를 빼면 급격한 회전·정지·텍스처 부족 구간에서 자세가 
 .venv/bin/python -m pytest -q
 .venv/bin/python map_rgbd_gps.py --help
 .venv/bin/python postprocess_cloud.py --help
+conda run -n depth-map-postprocess python convert_cloud_to_las.py --help
 ```
 
 실데이터 스모크 테스트는 입력이 유효할 때 `--max-frames 20` 이하로 한 번만 실행하고,

@@ -421,3 +421,20 @@ route_result/
 병합 중에는 point cloud를 다시 열지 않는다. 초기 중복 조건은 동일 defect type,
 chainage/lateral/polygon 거리와 metric 상대차이며 원본 ID는 `merged_from`에 보존한다. 실제
 청크 seam 오차가 unknown이므로 현재 허용치는 experimental이다.
+
+## 14. 추가 형상 screening 경계
+
+Stage 06 detector는 기존 포트홀·러팅·범프 및 내부 형상 점수와 분리된 opt-in 모듈이다. 네
+feature flag는 기본 `false`이고 detector별 예외를 격리한다. 따라서 하나가 실패해도 기존
+geometry defect와 점수 계산은 계속된다.
+
+| 기능 | 입력/metric | 제품 경계 |
+|---|---|---|
+| 단차·맨홀 후보 | residual gradient, `step_height_m`, `approach_slope_percent`, `edge_length_m` | 자산 DB/RGB 확인 전 후보 |
+| 횡단경사 | reference surface `dz/dt`, median/p05/p95, crown offset | 교차로 ROI 없으면 manual review |
+| 종단경사 | trajectory Z를 복원한 reference surface `dz/ds`, 기존 `roughness_proxy_m` | 표준 IRI 아님 |
+| 물고임 screening | priority-flood DEM fill, 잠재 깊이·면적·체적 | 배수구/용량/강우 없는 screening proxy |
+
+물고임 기능은 폐쇄 함몰 기하만 계산한다. 배수구 위치가 없는 현재 입력으로 drainage capacity나
+침수 예측을 만들지 않는다. 모든 Stage 06 threshold는 실측 holdout으로 보정되기 전까지
+experimental이며 자동 승인하지 않는다.

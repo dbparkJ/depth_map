@@ -9,6 +9,12 @@ from typing import Any, Mapping
 
 import numpy as np
 
+from .advanced_geometry import (
+    crossfall_profile,
+    detect_ponding_screening,
+    detect_step_manhole_candidates,
+    longitudinal_profile,
+)
 from .config import AnalysisConfig
 from .detectors import (
     RutSeries,
@@ -23,7 +29,7 @@ from .report import render_html_report
 from .roi import ZONE_TYPE_CODES, RoadRoi, classify_st
 
 
-ALGORITHM_VERSION = "road-condition-geometry-mvp-1"
+ALGORITHM_VERSION = "road-condition-geometry-mvp-2"
 
 
 def _grade(score: float) -> str:
@@ -441,8 +447,62 @@ def analyze_points(
     potholes = detect_potholes(grid, resolved_config.detection)
     bumps = detect_bumps(grid, resolved_config.detection)
     ruts, rut_series = detect_rutting(grid, resolved_config.detection)
+    advanced_defects: list[Defect] = []
+    advanced_results: dict[str, Any] = {}
+    advanced_errors: list[str] = []
+
+    def run_advanced(name: str, enabled: bool, operation: Any) -> Any:
+        if not enabled:
+            advanced_results[name] = {"state": "disabled"}
+            return None
+        try:
+            value = operation()
+            advanced_results[name] = {"state": "completed"}
+            return value
+        except Exception as exc:  # noqa: BLE001 - detector isolation is contractual
+            message = f"{type(exc).__name__}: {exc}"
+            advanced_results[name] = {"state": "failed", "error": message}
+            advanced_errors.append(f"{name}: {message}")
+            return None
+
+    step_candidates = run_advanced(
+        "step_manhole",
+        resolved_config.advanced_geometry.step_manhole_enabled,
+        lambda: detect_step_manhole_candidates(
+            grid, resolved_config.advanced_geometry
+        ),
+    )
+    if step_candidates is not None:
+        advanced_defects.extend(step_candidates)
+        advanced_results["step_manhole"]["candidate_count"] = len(step_candidates)
+    crossfall = run_advanced(
+        "crossfall",
+        resolved_config.advanced_geometry.crossfall_enabled,
+        lambda: crossfall_profile(grid),
+    )
+    if crossfall is not None:
+        advanced_results["crossfall"]["profile"] = crossfall
+    longitudinal = run_advanced(
+        "longitudinal",
+        resolved_config.advanced_geometry.longitudinal_enabled,
+        lambda: longitudinal_profile(grid, resolved_config.detection),
+    )
+    if longitudinal is not None:
+        advanced_results["longitudinal"]["profile"] = longitudinal
+    ponding_candidates = run_advanced(
+        "ponding_screening",
+        resolved_config.advanced_geometry.ponding_screening_enabled,
+        lambda: detect_ponding_screening(
+            grid, resolved_config.advanced_geometry
+        ),
+    )
+    if ponding_candidates is not None:
+        advanced_defects.extend(ponding_candidates)
+        advanced_results["ponding_screening"]["candidate_count"] = len(
+            ponding_candidates
+        )
     defects = sorted(
-        [*potholes, *bumps, *ruts],
+        [*potholes, *bumps, *ruts, *advanced_defects],
         key=lambda item: (item.chainage_m, item.defect_type, item.defect_id),
     )
     if road_roi is not None and defects:
@@ -557,6 +617,12 @@ def analyze_points(
                 )
             ),
             "roughness_proxy_m": float(roughness),
+            "advanced_geometry_candidate_count": len(advanced_defects),
+        },
+        "advanced_geometry": {
+            "contract": "opt_in_experimental_screening",
+            "detectors": advanced_results,
+            "failure_count": len(advanced_errors),
         },
         "scores": {
             "geometry_score": float(score),
@@ -583,6 +649,27 @@ def analyze_points(
     if bool((quality_context or {}).get("manual_review_required", False)):
         summary["limitations"].append(
             "Camera calibration is unknown or estimated; geometry results require manual review."
+        )
+    if resolved_config.advanced_geometry.step_manhole_enabled:
+        summary["limitations"].append(
+            "Step/manhole geometry candidates require asset inventory or RGB confirmation."
+        )
+    if resolved_config.advanced_geometry.crossfall_enabled:
+        summary["limitations"].append(
+            "Crossfall values are experimental and intersection exclusion is not automatic without ROI semantics."
+        )
+    if resolved_config.advanced_geometry.longitudinal_enabled:
+        summary["limitations"].append(
+            "Longitudinal slope and roughness proxy are not standardized IRI."
+        )
+    if resolved_config.advanced_geometry.ponding_screening_enabled:
+        summary["limitations"].append(
+            "Ponding output is a closed-depression screening proxy; no drain capacity or flooding prediction is computed."
+        )
+    if advanced_errors:
+        summary["limitations"].append(
+            "Advanced detector failures were isolated and require review: "
+            + "; ".join(advanced_errors)
         )
     return AnalysisProducts(summary=summary, defects=defects, segments=segments, surface=grid)
 

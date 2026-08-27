@@ -250,6 +250,23 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "format_version": 1,
             "sources": ["synthetic", "mapping_bundle"],
             "geometry_detectors": ["pothole", "rutting", "bump"],
+            "experimental_geometry_screening": {
+                "default_mode": "disabled",
+                "feature_flags": [
+                    "config.advanced_geometry.step_manhole_enabled",
+                    "config.advanced_geometry.crossfall_enabled",
+                    "config.advanced_geometry.longitudinal_enabled",
+                    "config.advanced_geometry.ponding_screening_enabled",
+                ],
+                "outputs": [
+                    "step_or_manhole_candidates",
+                    "crossfall_profile",
+                    "longitudinal_profile",
+                    "roughness_proxy",
+                    "ponding_screening_proxy",
+                ],
+                "engineering_calibration": "required",
+            },
             "road_roi": {
                 "format": "GeoJSON Polygon/MultiPolygon in local_road_ST_metres",
                 "zone_types": ["road", "lane", "shoulder", "exclusion"],
@@ -285,6 +302,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 "html_report",
                 "maintenance_scenario",
                 "calibration_quality_metadata",
+                "advanced_geometry_screening",
             ],
             "planned_outputs": [
                 "rgb_cracks",

@@ -124,11 +124,15 @@ ground truth가 아직 `unknown`이다. 따라서 실험 threshold는 자동 승
 
 ### P1: 추가 형상 분석
 
-- [ ] 맨홀·단차
-- [ ] 횡단경사
-- [ ] 종단경사
-- [ ] 물고임 depression screening
+- [x] opt-in 맨홀·단차 geometry candidate와 독립 실패 격리
+- [x] opt-in 횡단경사 reference-surface profile
+- [x] opt-in 종단경사와 기존 roughness proxy profile
+- [x] opt-in DEM depression 물고임 screening proxy
 - [ ] calibrated roughness/IRI 비교
+
+추가 형상 기능은 기본 비활성화이며 threshold는 합성 검증만 마친 experimental 값이다. 맨홀
+자산 DB, 배수구 위치, roughness 비교 장비가 없으므로 asset identity, drainage capacity, 표준 IRI를
+산출하지 않는다.
 
 ### P1: UI와 리포트
 

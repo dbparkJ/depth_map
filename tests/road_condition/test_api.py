@@ -20,6 +20,10 @@ def test_health_and_synthetic_job(tmp_path) -> None:
         health = client.get("/api/v1/health")
         assert health.status_code == 200
         assert health.json()["status"] == "ok"
+        capabilities = client.get("/api/v1/capabilities").json()
+        screening = capabilities["experimental_geometry_screening"]
+        assert screening["default_mode"] == "disabled"
+        assert len(screening["feature_flags"]) == 4
 
         response = client.post(
             "/api/v1/jobs",

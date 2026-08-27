@@ -228,12 +228,17 @@ def _owned_products(
     window: TileWindow,
     analysis_config: AnalysisConfig,
 ) -> AnalysisProducts:
-    defects = [item for item in products.defects if _owns_chainage(item.chainage_m, window)]
+    defects = [
+        item
+        for item in products.defects
+        if _owns_chainage(item.chainage_m, window)
+    ]
     segments = _core_segments(products, defects, analysis_config, window)
     summary = deepcopy(products.summary)
     potholes = [item for item in defects if item.defect_type == "pothole"]
     ruts = [item for item in defects if item.defect_type == "rutting"]
     bumps = [item for item in defects if item.defect_type == "bump"]
+    advanced = [item for item in defects if item.source == "geometry_screening"]
     summary["tile"] = {
         **asdict(window),
         "ownership": "defect centroid in core; halo used for fitting and detection",
@@ -244,24 +249,68 @@ def _owned_products(
         {
             "defect_count": len(defects),
             "pothole_count": len(potholes),
-            "pothole_area_m2": float(sum(item.metrics.get("area_m2", 0.0) for item in potholes)),
-            "pothole_volume_m3": float(sum(item.metrics.get("volume_m3", 0.0) for item in potholes)),
-            "max_pothole_depth_m": float(max((item.metrics.get("max_depth_m", 0.0) for item in potholes), default=0.0)),
+            "pothole_area_m2": float(
+                sum(item.metrics.get("area_m2", 0.0) for item in potholes)
+            ),
+            "pothole_volume_m3": float(
+                sum(item.metrics.get("volume_m3", 0.0) for item in potholes)
+            ),
+            "max_pothole_depth_m": float(
+                max(
+                    (item.metrics.get("max_depth_m", 0.0) for item in potholes),
+                    default=0.0,
+                )
+            ),
             "rutting_count": len(ruts),
-            "max_rut_depth_m": float(max((item.metrics.get("max_depth_m", 0.0) for item in ruts), default=0.0)),
+            "max_rut_depth_m": float(
+                max(
+                    (item.metrics.get("max_depth_m", 0.0) for item in ruts),
+                    default=0.0,
+                )
+            ),
             "bump_count": len(bumps),
-            "max_bump_height_m": float(max((item.metrics.get("max_height_m", 0.0) for item in bumps), default=0.0)),
+            "max_bump_height_m": float(
+                max(
+                    (item.metrics.get("max_height_m", 0.0) for item in bumps),
+                    default=0.0,
+                )
+            ),
+            "advanced_geometry_candidate_count": len(advanced),
         }
     )
+    detectors = summary.get("advanced_geometry", {}).get("detectors", {})
+    if detectors.get("step_manhole", {}).get("state") == "completed":
+        detectors["step_manhole"]["candidate_count"] = sum(
+            item.defect_type in {"manhole_step_candidate", "step_anomaly"}
+            for item in advanced
+        )
+    if detectors.get("ponding_screening", {}).get("state") == "completed":
+        detectors["ponding_screening"]["candidate_count"] = sum(
+            item.defect_type == "ponding_screening_proxy" for item in advanced
+        )
     summary["limitations"].append(
         "Tile result owns only defects whose centroid is in the core; surface preview includes halo."
     )
+    if any(
+        detectors.get(name, {}).get("state") == "completed"
+        for name in ("crossfall", "longitudinal")
+    ):
+        summary["limitations"].append(
+            "Tile slope profiles include the halo surface and are contextual, not core report metrics."
+        )
     return AnalysisProducts(summary=summary, defects=defects, segments=segments, surface=products.surface)
 
 
 def _primary_metric(record: Mapping[str, Any]) -> float:
     metrics = record.get("metrics") or {}
-    for name in ("max_depth_m", "max_height_m", "area_m2", "length_m"):
+    for name in (
+        "max_depth_m",
+        "max_height_m",
+        "step_height_m",
+        "potential_retention_depth_m",
+        "area_m2",
+        "length_m",
+    ):
         if name in metrics:
             return abs(float(metrics[name]))
     return 0.0

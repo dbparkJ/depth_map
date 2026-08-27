@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field, replace
+from math import isfinite
 from typing import Any, Mapping
 
 
@@ -141,12 +142,50 @@ class PoseConfig:
 
 
 @dataclass(frozen=True)
+class AdvancedGeometryConfig:
+    """Opt-in screening detectors that are not calibrated engineering products."""
+
+    step_manhole_enabled: bool = False
+    crossfall_enabled: bool = False
+    longitudinal_enabled: bool = False
+    ponding_screening_enabled: bool = False
+    step_min_height_m: float = 0.015
+    step_min_edge_length_m: float = 0.30
+    step_min_gradient_percent: float = 8.0
+    ponding_min_depth_m: float = 0.010
+    ponding_min_area_m2: float = 0.050
+
+    def validate(self) -> None:
+        for name in (
+            "step_manhole_enabled",
+            "crossfall_enabled",
+            "longitudinal_enabled",
+            "ponding_screening_enabled",
+        ):
+            if not isinstance(getattr(self, name), bool):
+                raise ValueError(f"{name} must be a boolean")
+        positive = {
+            "step_min_height_m": self.step_min_height_m,
+            "step_min_edge_length_m": self.step_min_edge_length_m,
+            "step_min_gradient_percent": self.step_min_gradient_percent,
+            "ponding_min_depth_m": self.ponding_min_depth_m,
+            "ponding_min_area_m2": self.ponding_min_area_m2,
+        }
+        for name, value in positive.items():
+            if not isfinite(value) or value <= 0:
+                raise ValueError(f"{name} must be finite and positive")
+
+
+@dataclass(frozen=True)
 class AnalysisConfig:
     format_version: int = 1
     surface: SurfaceConfig = field(default_factory=SurfaceConfig)
     detection: DetectionConfig = field(default_factory=DetectionConfig)
     score: ScoreConfig = field(default_factory=ScoreConfig)
     pose: PoseConfig = field(default_factory=PoseConfig)
+    advanced_geometry: AdvancedGeometryConfig = field(
+        default_factory=AdvancedGeometryConfig
+    )
 
     def validate(self) -> None:
         if self.format_version != 1:
@@ -155,6 +194,7 @@ class AnalysisConfig:
         self.detection.validate()
         self.score.validate()
         self.pose.validate()
+        self.advanced_geometry.validate()
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -167,7 +207,14 @@ class AnalysisConfig:
         if not overrides:
             base.validate()
             return base
-        allowed_top = {"format_version", "surface", "detection", "score", "pose"}
+        allowed_top = {
+            "format_version",
+            "surface",
+            "detection",
+            "score",
+            "pose",
+            "advanced_geometry",
+        }
         unknown_top = set(overrides) - allowed_top
         if unknown_top:
             raise ValueError(f"unknown config sections: {', '.join(sorted(unknown_top))}")
@@ -194,6 +241,11 @@ class AnalysisConfig:
             ),
             score=apply_section(base.score, overrides.get("score"), "score"),
             pose=apply_section(base.pose, overrides.get("pose"), "pose"),
+            advanced_geometry=apply_section(
+                base.advanced_geometry,
+                overrides.get("advanced_geometry"),
+                "advanced_geometry",
+            ),
         )
         result.validate()
         return result

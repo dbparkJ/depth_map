@@ -384,3 +384,27 @@ PYTHONPATH=. .venv/bin/python scripts/road_condition_merge_routes.py \
 
 offset은 실제 trajectory seam 검토 후 확정해야 한다. 현재 merge tolerance는 experimental이며
 청크 pose 오차가 측정되지 않은 상태에서 자동 승인하지 않는다.
+
+## 15. Stage 06 추가 형상 screening
+
+추가 기능은 기존 결과를 보존하기 위해 기본 비활성화다. API 작업의 `config`에서 필요한 기능만
+독립적으로 켠다.
+
+```json
+{
+  "source_type": "mapping_bundle",
+  "mapping_output_path": "route_a/chunk_0000",
+  "config": {
+    "advanced_geometry": {
+      "step_manhole_enabled": true,
+      "crossfall_enabled": true,
+      "longitudinal_enabled": true,
+      "ponding_screening_enabled": true
+    }
+  }
+}
+```
+
+단차 결과는 맨홀/구조물 `candidate`, 물 관련 결과는 `ponding_screening_proxy`다. 맨홀 자산
+DB와 배수구 위치가 없으므로 자산 확정, 배수 용량, 침수 예측은 제공하지 않는다. 종단 profile의
+`roughness_proxy_m`도 표준 IRI가 아니며 실측 비교 장비로 보정하기 전에는 내부 실험값이다.

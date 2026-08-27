@@ -302,3 +302,39 @@ uvicorn app.main:app --host 127.0.0.1 --port 8081 --reload
 ```
 
 정적 웹은 Nginx proxy가 필요하므로 전체 기능 확인은 Compose 실행을 권장한다.
+
+## 12. Stage 03 pose와 보정 bundle
+
+새 mapping 실행은 기존 파일을 바꾸지 않고 다음 optional 파일을 추가한다.
+
+```text
+data/camera_poses.npz
+data/analysis_source_manifest.json
+```
+
+장착값을 실제 측정하지 않았다면 기본 `--calibration-status unknown`을 유지한다. 숫자 0은
+mapping 호환 가정으로만 사용되고 manifest의 calibrated 값은 null이며 분석 결과는
+`manual_review_required`다. 측정값이 있을 때만 다음처럼 상태와 높이를 명시한다.
+
+```bash
+.venv/bin/python map_rgbd_gps.py DATASET_PATH \
+  --output artifacts/calibrated_short \
+  --max-frames 20 \
+  --calibration-status measured \
+  --camera-model-name OAK-D-LR \
+  --camera-height-m 1.50 \
+  --mount-yaw-deg 0.2 --mount-pitch-deg 14.8 --mount-roll-deg -0.3 \
+  --camera-offset-right-m 0.04 \
+  --camera-offset-down-m 0.18 \
+  --camera-offset-forward-m 0.32
+```
+
+승인된 짧은 평탄 기준 mapping bundle에서 거리 band별 noise와 실험 threshold 후보를 만든다.
+
+```bash
+PYTHONPATH=. .venv/bin/python scripts/road_condition_calibrate.py \
+  artifacts/calibrated_flat_short
+```
+
+결과는 기본적으로 `<mapping>/calibration/` 아래 manifest, flat-surface noise JSON,
+포트홀/러팅 ground-truth worksheet, threshold recommendation과 HTML report로 기록된다.

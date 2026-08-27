@@ -134,9 +134,17 @@ Compose에서 호스트 디렉터리를 `/workspace`로 마운트한다. API에�
 <output>/data/cloud_raw_metadata.npz    # raw일 때 선택적 메타데이터
 <output>/data/trajectory.json
 <output>/data/summary.json
+<output>/data/camera_poses.npz           # Stage 03 이후 optional frame pose
+<output>/data/analysis_source_manifest.json # Stage 03 이후 optional calibration provenance
 ```
 
 `clean` 또는 `removed`를 지정하면 해당 PLY를 읽는다. 포트홀 보존을 위해 기본값은 `raw`다.
+
+`camera_poses.npz`가 없으면 기존 bundle은 계속 PLY-only로 분석한다. 이 경우 결과 quality에
+`ply_only_pose_unavailable`을 남기며 프레임 단위 정밀도 주장을 하지 않는다. 보정 상태가
+`unknown` 또는 `estimated`이면 `manual_review_required`다. `T_enu_camera`는 optical camera
+XYZ(right/down/forward)를 local ENU로 옮기는 4×4 행렬이며 모든 변환은
+`T_target_source` 열벡터 규칙을 사용한다.
 
 ### 4.3 PLY 제한
 

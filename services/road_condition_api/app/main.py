@@ -97,6 +97,8 @@ def _run_job(
                 "profile": request.synthetic_profile,
                 "truth": scene.truth,
             }
+            pose_context = None
+            quality_context = None
         else:
             resolved = resolve_relative_path(
                 settings.workspace_root,
@@ -115,7 +117,18 @@ def _run_job(
                 ),
                 "point_cloud_stage": request.point_cloud_stage,
                 "mapping_format_version": bundle.summary.get("format_version"),
+                "capabilities": bundle.analysis_capabilities,
+                "calibration_status": bundle.analysis_quality["calibration_status"],
             }
+            pose_context = (
+                {
+                    "T_enu_camera": bundle.camera_poses.T_enu_camera,
+                    "pose_quality_score": bundle.camera_poses.pose_quality_score,
+                }
+                if bundle.camera_poses is not None
+                else None
+            )
+            quality_context = bundle.analysis_quality
         store.update_status(
             job_id,
             progress=0.25,
@@ -129,6 +142,8 @@ def _run_job(
             point_metadata=metadata,
             source=source,
             source_origin=source_origin,
+            pose_context=pose_context,
+            quality_context=quality_context,
         )
         store.update_status(
             job_id,
@@ -211,6 +226,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "format_version": 1,
             "sources": ["synthetic", "mapping_bundle"],
             "geometry_detectors": ["pothole", "rutting", "bump"],
+            "pose_contract": {
+                "camera_poses_format_version": 1,
+                "analysis_source_manifest_format_version": 1,
+                "frame_reprojection_feature_flag": "config.pose.frame_reprojection_enabled",
+                "default_mode": "ply_only",
+            },
             "implemented_outputs": [
                 "summary",
                 "segments",
@@ -219,6 +240,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 "surface_preview",
                 "html_report",
                 "maintenance_scenario",
+                "calibration_quality_metadata",
             ],
             "planned_outputs": [
                 "rgb_cracks",

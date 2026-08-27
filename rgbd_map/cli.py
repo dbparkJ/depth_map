@@ -8,6 +8,7 @@ from pathlib import Path
 
 import numpy as np
 
+from .calibration import camera_model_name, repository_commit_sha
 from .dataset import RgbdGpsDataset
 from .depth_quality import DepthQualityPolicy
 from .exporters import cloud_build_stats_summary, export_mapping
@@ -301,6 +302,26 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--camera-offset-right-m", type=float, default=0.0)
     parser.add_argument("--camera-offset-down-m", type=float, default=0.0)
     parser.add_argument("--camera-offset-forward-m", type=float, default=0.0)
+    parser.add_argument(
+        "--calibration-status",
+        choices=("unknown", "measured", "estimated"),
+        default="unknown",
+        help=(
+            "Provenance status for mount/lever-arm values. Unknown keeps numeric "
+            "mapping defaults but records null calibrated values and manual review."
+        ),
+    )
+    parser.add_argument(
+        "--camera-height-m",
+        type=float,
+        default=None,
+        help="Measured road-to-lens-center height for analysis provenance",
+    )
+    parser.add_argument(
+        "--camera-model-name",
+        default=None,
+        help="Optional exact device model override for the analysis manifest",
+    )
     parser.add_argument("--progress-every", type=int, default=50)
     add_postprocess_arguments(parser)
     return parser
@@ -634,6 +655,28 @@ def run(args: argparse.Namespace) -> dict:
     )
     viewer_dir = Path(__file__).resolve().parent.parent / "viewer"
     output_dir = Path(args.output).expanduser().resolve()
+    pose_export_context = {
+        "camera": dataset.camera,
+        "pose_quality_score": frame_audit.quality_scores,
+        "dataset_id": Path(args.dataset).expanduser().resolve().name,
+        "mapping_commit_sha": repository_commit_sha(
+            Path(__file__).resolve().parent.parent
+        ),
+        "camera_model": (
+            args.camera_model_name
+            if args.camera_model_name
+            else camera_model_name(dataset.metadata)
+        ),
+        "camera_height_m": args.camera_height_m,
+        "mount_yaw_deg": args.mount_yaw_deg,
+        "mount_pitch_deg": args.mount_pitch_deg,
+        "mount_roll_deg": args.mount_roll_deg,
+        "camera_offset_right_m": args.camera_offset_right_m,
+        "camera_offset_down_m": args.camera_offset_down_m,
+        "camera_offset_forward_m": args.camera_offset_forward_m,
+        "rgb_depth_alignment": "aligned_depth_to_rgb",
+        "calibration_status": args.calibration_status,
+    }
     cloud_summary_override = None
     postprocess_execution = None
     if cloud is None:
@@ -756,6 +799,7 @@ def run(args: argparse.Namespace) -> dict:
             cloud_config.browser_max_points,
             parameters,
             cloud_summary_override=provisional_cloud,
+            pose_export_context=pose_export_context,
         )
         try:
             postprocess_execution = execute_postprocess(
@@ -789,6 +833,7 @@ def run(args: argparse.Namespace) -> dict:
                 parameters,
                 cloud_summary_override=failed_cloud,
                 write_support_files=False,
+                pose_export_context=pose_export_context,
             )
             raise
         override_names = (
@@ -837,6 +882,7 @@ def run(args: argparse.Namespace) -> dict:
         parameters,
         cloud_summary_override=cloud_summary_override,
         write_support_files=cloud is None,
+        pose_export_context=pose_export_context,
     )
     if cloud is not None:
         cloud_summary = summary["cloud"]

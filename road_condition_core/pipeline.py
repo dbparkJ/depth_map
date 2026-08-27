@@ -193,6 +193,84 @@ def _sample_points(
     return points[keep], colors[keep], sampled_metadata, count
 
 
+def _apply_frame_reprojection(
+    points: np.ndarray,
+    colors: np.ndarray,
+    metadata: Mapping[str, np.ndarray] | None,
+    pose_context: Mapping[str, np.ndarray] | None,
+    minimum_quality_score: float,
+) -> tuple[np.ndarray, np.ndarray, dict[str, np.ndarray], dict[str, Any]]:
+    """Round-trip representative frame points and gate low-quality poses.
+
+    Raw fused PLY stores ENU points rather than original pixels. This opt-in mode
+    therefore validates the ENU↔camera transform and applies frame-pose quality
+    gating; it does not claim to recreate the original RGB-D samples.
+    """
+
+    aligned = dict(metadata or {})
+    if pose_context is None:
+        raise ValueError("frame reprojection requires camera_poses.npz")
+    source_ids = np.asarray(aligned.get("source_frame_id"))
+    if source_ids.shape != (len(points),):
+        raise ValueError(
+            "frame reprojection requires point-aligned source_frame_id metadata"
+        )
+    transforms = np.asarray(pose_context.get("T_enu_camera"), dtype=np.float64)
+    quality = np.asarray(pose_context.get("pose_quality_score"), dtype=np.float64)
+    if transforms.ndim != 3 or transforms.shape[1:] != (4, 4):
+        raise ValueError("frame reprojection pose transforms must have shape (N, 4, 4)")
+    if quality.shape != (len(transforms),):
+        raise ValueError("frame reprojection pose quality must align with transforms")
+    source_ids = source_ids.astype(np.int64, copy=False)
+    valid_source = (source_ids >= 0) & (source_ids < len(transforms))
+    retained = valid_source.copy()
+    retained[valid_source] &= quality[source_ids[valid_source]] >= minimum_quality_score
+    if np.count_nonzero(retained) < 10_000:
+        raise ValueError("frame reprojection retained fewer than 10,000 supported points")
+
+    retained_points = np.asarray(points[retained], dtype=np.float64)
+    retained_ids = source_ids[retained]
+    maximum_error = 0.0
+    for begin in range(0, len(retained_points), 250_000):
+        end = min(begin + 250_000, len(retained_points))
+        frame_transforms = transforms[retained_ids[begin:end]]
+        rotations = frame_transforms[:, :3, :3]
+        translations = frame_transforms[:, :3, 3]
+        camera_points = np.einsum(
+            "nij,nj->ni",
+            np.swapaxes(rotations, 1, 2),
+            retained_points[begin:end] - translations,
+        )
+        round_trip = np.einsum("nij,nj->ni", rotations, camera_points) + translations
+        if len(round_trip):
+            maximum_error = max(
+                maximum_error,
+                float(np.max(np.linalg.norm(round_trip - retained_points[begin:end], axis=1))),
+            )
+        retained_points[begin:end] = round_trip
+    filtered_metadata = {
+        name: np.asarray(values)[retained]
+        for name, values in aligned.items()
+        if np.asarray(values).shape == (len(points),)
+    }
+    return (
+        retained_points.astype(points.dtype, copy=False),
+        colors[retained],
+        filtered_metadata,
+        {
+            "frame_reprojection_enabled": True,
+            "input_point_count": int(len(points)),
+            "retained_point_count": int(len(retained_points)),
+            "minimum_pose_quality_score": float(minimum_quality_score),
+            "round_trip_max_error_m": maximum_error,
+            "mode_limit": (
+                "Fused PLY representative points are pose-validated and quality-gated; "
+                "original RGB-D pixels are not reconstructed."
+            ),
+        },
+    )
+
+
 def analyze_points(
     points_enu_m: np.ndarray,
     colors_rgb: np.ndarray,
@@ -202,6 +280,8 @@ def analyze_points(
     point_metadata: Mapping[str, np.ndarray] | None = None,
     source: Mapping[str, Any] | None = None,
     source_origin: dict[str, float] | None = None,
+    pose_context: Mapping[str, np.ndarray] | None = None,
+    quality_context: Mapping[str, Any] | None = None,
 ) -> AnalysisProducts:
     resolved_config = config or AnalysisConfig()
     resolved_config.validate()
@@ -211,10 +291,23 @@ def analyze_points(
         raise ValueError("points_enu_m must have shape (N, 3)")
     if colors.shape != points.shape:
         raise ValueError("colors_rgb must have shape (N, 3)")
+    reprojection_quality: dict[str, Any] = {
+        "frame_reprojection_enabled": False,
+        "mode": "ply_only",
+    }
+    prepared_metadata = dict(point_metadata or {})
+    if resolved_config.pose.frame_reprojection_enabled:
+        points, colors, prepared_metadata, reprojection_quality = _apply_frame_reprojection(
+            points,
+            colors,
+            prepared_metadata,
+            pose_context,
+            resolved_config.pose.minimum_quality_score,
+        )
     points, colors, metadata, original_count = _sample_points(
         points,
         colors,
-        point_metadata,
+        prepared_metadata,
         resolved_config.surface.max_input_points,
     )
     grid = rasterize_road_surface(
@@ -273,6 +366,8 @@ def analyze_points(
             "median_position_std_m": float(
                 np.median(grid.position_std_m[np.isfinite(grid.position_std_m)])
             ),
+            **dict(quality_context or {}),
+            "pose_surface_mode": reprojection_quality,
         },
         "coverage": {
             "chainage_start_m": float(grid.s_values_m[0]),
@@ -324,6 +419,16 @@ def analyze_points(
             "Low coverage or pose/depth uncertainty requires manual review or recollection.",
         ],
     }
+    if (source or {}).get("type") == "mapping_bundle" and not bool(
+        (quality_context or {}).get("pose_file_available", False)
+    ):
+        summary["limitations"].append(
+            "camera_poses.npz is unavailable; PLY-only geometry cannot provide frame-level precision claims."
+        )
+    if bool((quality_context or {}).get("manual_review_required", False)):
+        summary["limitations"].append(
+            "Camera calibration is unknown or estimated; geometry results require manual review."
+        )
     return AnalysisProducts(summary=summary, defects=defects, segments=segments, surface=grid)
 
 

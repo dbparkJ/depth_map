@@ -127,11 +127,26 @@ class ScoreConfig:
 
 
 @dataclass(frozen=True)
+class PoseConfig:
+    """Optional frame-pose use; PLY-only remains the compatibility default."""
+
+    frame_reprojection_enabled: bool = False
+    minimum_quality_score: float = 0.50
+
+    def validate(self) -> None:
+        if not isinstance(self.frame_reprojection_enabled, bool):
+            raise ValueError("frame_reprojection_enabled must be a boolean")
+        if not 0.0 <= self.minimum_quality_score <= 1.0:
+            raise ValueError("minimum_quality_score must be in [0, 1]")
+
+
+@dataclass(frozen=True)
 class AnalysisConfig:
     format_version: int = 1
     surface: SurfaceConfig = field(default_factory=SurfaceConfig)
     detection: DetectionConfig = field(default_factory=DetectionConfig)
     score: ScoreConfig = field(default_factory=ScoreConfig)
+    pose: PoseConfig = field(default_factory=PoseConfig)
 
     def validate(self) -> None:
         if self.format_version != 1:
@@ -139,6 +154,7 @@ class AnalysisConfig:
         self.surface.validate()
         self.detection.validate()
         self.score.validate()
+        self.pose.validate()
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -151,7 +167,7 @@ class AnalysisConfig:
         if not overrides:
             base.validate()
             return base
-        allowed_top = {"format_version", "surface", "detection", "score"}
+        allowed_top = {"format_version", "surface", "detection", "score", "pose"}
         unknown_top = set(overrides) - allowed_top
         if unknown_top:
             raise ValueError(f"unknown config sections: {', '.join(sorted(unknown_top))}")
@@ -177,6 +193,7 @@ class AnalysisConfig:
                 base.detection, overrides.get("detection"), "detection"
             ),
             score=apply_section(base.score, overrides.get("score"), "score"),
+            pose=apply_section(base.pose, overrides.get("pose"), "pose"),
         )
         result.validate()
         return result

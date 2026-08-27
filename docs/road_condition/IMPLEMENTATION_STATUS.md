@@ -96,14 +96,18 @@
 
 ### P0: 실데이터 정확도
 
-- [ ] 카메라 pose 4×4 matrix export
-- [ ] 장착각·lever arm manifest
-- [ ] frame reprojection surface mode
-- [ ] 평탄 기준면 거리 band별 Z noise
+- [x] 카메라 pose 4×4 matrix optional export와 strict loader
+- [x] 장착각·lever arm manifest (`unknown`은 null + manual review)
+- [~] frame reprojection feature flag와 pose-quality gating; 원 RGB-D pixel 재구성 전
+- [x] 평탄 기준면 거리 band별 Z MAD/RMSE 계산 하네스
 - [ ] 실측 포트홀 깊이·면적·체적 비교
 - [ ] 실측 좌우 러팅 비교
-- [ ] threshold recommendation report
+- [x] noise-scaled experimental threshold recommendation report
 - [ ] stage timing과 peak RSS diagnostics
+
+Stage 03 코드 계약과 합성 검증은 완료했지만 장치/장착값, 평탄 실데이터, 포트홀·러팅
+ground truth가 아직 `unknown`이다. 따라서 실험 threshold는 자동 승인하지 않으며 Stage 03
+실데이터 accuracy acceptance는 보류 상태다.
 
 ### P1: 도로 ROI와 전체 노선
 

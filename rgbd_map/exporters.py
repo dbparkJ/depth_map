@@ -7,10 +7,16 @@ import shutil
 import struct
 from dataclasses import asdict
 from pathlib import Path
+from typing import Any, Mapping
 
 import numpy as np
 
-from .dataset import FrameRecord, InterpolatedGps
+from .calibration import (
+    build_analysis_source_manifest,
+    build_camera_pose_payload,
+    write_camera_pose_bundle,
+)
+from .dataset import CameraModel, FrameRecord, InterpolatedGps
 from .geodesy import LocalENU
 from .odometry import OdometryResult
 from .pointcloud import PointCloudResult, spatially_sample_indices
@@ -503,6 +509,7 @@ def export_mapping(
     *,
     cloud_summary_override: dict[str, object] | None = None,
     write_support_files: bool = True,
+    pose_export_context: Mapping[str, Any] | None = None,
 ) -> dict:
     output_dir.mkdir(parents=True, exist_ok=True)
     data_dir = output_dir / "data"
@@ -512,6 +519,52 @@ def export_mapping(
         write_odometry_diagnostics(
             data_dir / "odometry.csv", frames, gps, trajectory, odometry
         )
+        if pose_export_context is not None:
+            camera = pose_export_context.get("camera")
+            if not isinstance(camera, CameraModel):
+                raise ValueError("pose_export_context.camera must be a CameraModel")
+            payload = build_camera_pose_payload(
+                frames,
+                trajectory,
+                camera,
+                pose_quality_score=pose_export_context.get("pose_quality_score"),
+                camera_offset_right_m=float(
+                    pose_export_context.get("camera_offset_right_m", 0.0)
+                ),
+                camera_offset_down_m=float(
+                    pose_export_context.get("camera_offset_down_m", 0.0)
+                ),
+                camera_offset_forward_m=float(
+                    pose_export_context.get("camera_offset_forward_m", 0.0)
+                ),
+            )
+            manifest = build_analysis_source_manifest(
+                dataset_id=str(pose_export_context.get("dataset_id", "unknown")),
+                mapping_commit_sha=str(
+                    pose_export_context.get("mapping_commit_sha", "unknown")
+                ),
+                camera_model=str(pose_export_context.get("camera_model", "unknown")),
+                camera_height_m=pose_export_context.get("camera_height_m"),
+                mount_yaw_deg=float(pose_export_context.get("mount_yaw_deg", 0.0)),
+                mount_pitch_deg=float(pose_export_context.get("mount_pitch_deg", 0.0)),
+                mount_roll_deg=float(pose_export_context.get("mount_roll_deg", 0.0)),
+                camera_offset_right_m=float(
+                    pose_export_context.get("camera_offset_right_m", 0.0)
+                ),
+                camera_offset_down_m=float(
+                    pose_export_context.get("camera_offset_down_m", 0.0)
+                ),
+                camera_offset_forward_m=float(
+                    pose_export_context.get("camera_offset_forward_m", 0.0)
+                ),
+                rgb_depth_alignment=str(
+                    pose_export_context.get("rgb_depth_alignment", "unknown")
+                ),
+                calibration_status=str(
+                    pose_export_context.get("calibration_status", "unknown")
+                ),
+            )
+            write_camera_pose_bundle(data_dir, payload, manifest)
 
     cloud_summary: dict[str, object]
     if cloud_summary_override is not None:
@@ -560,6 +613,17 @@ def export_mapping(
             "features and independently surveyed control points."
         ),
     }
+    if pose_export_context is not None:
+        calibration_status = str(
+            pose_export_context.get("calibration_status", "unknown")
+        )
+        summary["road_condition_pose_contract"] = {
+            "format_version": 1,
+            "camera_poses": "camera_poses.npz",
+            "analysis_source_manifest": "analysis_source_manifest.json",
+            "calibration_status": calibration_status,
+            "manual_review_required": calibration_status != "measured",
+        }
     _json_dump(data_dir / "summary.json", summary)
     _json_dump(data_dir / "accuracy_report.json", trajectory.metrics)
 

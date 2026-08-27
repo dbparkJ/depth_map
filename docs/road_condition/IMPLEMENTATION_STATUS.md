@@ -184,6 +184,7 @@ GPU 환경은 모두 `unknown`이다. 합성 확률맵은 계약 검증에만 �
 
 ### P3: 운영
 
+- [~] Stage 13 전환 조건/운영 필수/수용 기준 readiness matrix; gate 미충족으로 보류
 - [ ] PostgreSQL
 - [ ] Redis/RabbitMQ
 - [ ] 분산 worker

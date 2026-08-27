@@ -589,3 +589,11 @@ source of truth의 임시 경계는 다음과 같다.
 
 운영 완료 조건은 인증, object connector/credential, source-of-truth 합의, callback을 선택할 경우
 서명 검증과 retry/dead-letter 정책을 별도 승인하는 것이다.
+
+## 21. Stage 13 분산 운영 전환 gate
+
+운영 SLA, 동시 장치 수, 다중 worker host, 조직/tenant 요구가 제공되지 않아 분산 queue 전환
+조건이 충족되지 않았다. 파일 queue와 2-service Compose는 그대로 유지하며 PostgreSQL, broker,
+worker, auth/TLS를 부분적으로 추가하지 않는다. 준비도와 미충족 수용 기준은
+`docs/road_condition/OPERATIONS_READINESS.md`에 기록한다. 현재 상태는
+`DEFERRED_GATE_NOT_MET`이며 production-ready가 아니다.

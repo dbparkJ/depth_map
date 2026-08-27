@@ -45,6 +45,9 @@ class CloudBuildConfig:
     keyframe_distance_m: float | None = None
     keyframe_angle_deg: float | None = None
     keyframe_max_dt_s: float | None = None
+    stationary_speed_threshold_m_s: float | None = None
+    stationary_min_duration_s: float = 2.0
+    stationary_max_cloud_frames: int = 5
 
 
 CLOUD_PRESETS: dict[str, CloudBuildConfig] = {
@@ -123,6 +126,17 @@ def resolve_cloud_build_config(args: argparse.Namespace) -> CloudBuildConfig:
             if getattr(args, "cloud_keyframe_max_dt_s", None) is None
             else float(args.cloud_keyframe_max_dt_s)
         ),
+        stationary_speed_threshold_m_s=(
+            None
+            if getattr(args, "stationary_speed_threshold_m_s", None) is None
+            else float(args.stationary_speed_threshold_m_s)
+        ),
+        stationary_min_duration_s=float(
+            getattr(args, "stationary_min_duration_s", 2.0)
+        ),
+        stationary_max_cloud_frames=int(
+            getattr(args, "stationary_max_cloud_frames", 5)
+        ),
     )
     if config.frame_stride <= 0:
         raise ValueError("--cloud-frame-stride must be positive")
@@ -154,6 +168,20 @@ def resolve_cloud_build_config(args: argparse.Namespace) -> CloudBuildConfig:
             raise ValueError(f"{option} must be positive when specified")
     if config.keyframe_angle_deg is not None and config.keyframe_angle_deg > 180.0:
         raise ValueError("--cloud-keyframe-angle-deg must not exceed 180")
+    if config.stationary_speed_threshold_m_s is not None and (
+        not isfinite(config.stationary_speed_threshold_m_s)
+        or config.stationary_speed_threshold_m_s < 0.0
+    ):
+        raise ValueError(
+            "--stationary-speed-threshold-m-s must be finite and non-negative"
+        )
+    if (
+        not isfinite(config.stationary_min_duration_s)
+        or config.stationary_min_duration_s <= 0.0
+    ):
+        raise ValueError("--stationary-min-duration-s must be positive")
+    if config.stationary_max_cloud_frames <= 0:
+        raise ValueError("--stationary-max-cloud-frames must be positive")
     min_depth_m = float(getattr(args, "min_depth_m", 1.0))
     max_depth_m = float(getattr(args, "max_depth_m", 30.0))
     if not (
@@ -244,6 +272,27 @@ def build_parser() -> argparse.ArgumentParser:
         type=float,
         default=None,
         help="Maximum time between cloud keyframes",
+    )
+    parser.add_argument(
+        "--stationary-speed-threshold-m-s",
+        type=float,
+        default=None,
+        help=(
+            "Enable GPS stationary cloud-frame limiting at or below this speed; "
+            "disabled by default"
+        ),
+    )
+    parser.add_argument(
+        "--stationary-min-duration-s",
+        type=float,
+        default=2.0,
+        help="Minimum continuous low-speed duration to limit (default: 2.0)",
+    )
+    parser.add_argument(
+        "--stationary-max-cloud-frames",
+        type=int,
+        default=5,
+        help="Maximum uniformly retained cloud frames per stationary run (default: 5)",
     )
 
     parser.add_argument("--mount-roll-deg", type=float, default=0.0)
@@ -450,6 +499,14 @@ def run(args: argparse.Namespace) -> dict:
             keyframe_distance_m=cloud_config.keyframe_distance_m,
             keyframe_angle_deg=cloud_config.keyframe_angle_deg,
             keyframe_max_dt_s=cloud_config.keyframe_max_dt_s,
+            gps_speed_m_s=gps.speed_m_s,
+            stationary_speed_threshold_m_s=(
+                cloud_config.stationary_speed_threshold_m_s
+            ),
+            stationary_min_duration_s=cloud_config.stationary_min_duration_s,
+            stationary_max_cloud_frames=(
+                cloud_config.stationary_max_cloud_frames
+            ),
             depth_edge_filter=postprocess_config.depth_edge_filter,
             depth_edge_radius_px=postprocess_config.depth_edge_radius_px,
             depth_edge_abs_m=postprocess_config.depth_edge_abs_m,
@@ -508,6 +565,13 @@ def run(args: argparse.Namespace) -> dict:
             "per_frame_max_points": cloud_config.per_frame_max_points,
             "roi_top_ratio": cloud_config.roi_top_ratio,
             "roi_bottom_ratio": cloud_config.roi_bottom_ratio,
+            "stationary_speed_threshold_m_s": (
+                cloud_config.stationary_speed_threshold_m_s
+            ),
+            "stationary_min_duration_s": cloud_config.stationary_min_duration_s,
+            "stationary_max_cloud_frames": (
+                cloud_config.stationary_max_cloud_frames
+            ),
         }
     )
     parameters["resolved_cloud_config"] = asdict(cloud_config)
@@ -551,7 +615,7 @@ def run(args: argparse.Namespace) -> dict:
             flush=True,
         )
     parameters["postprocess_output_options"] = asdict(output_options)
-    parameters["cloud_frame_selection"] = (
+    base_frame_selection = (
         "keyframe"
         if any(
             value is not None
@@ -562,6 +626,11 @@ def run(args: argparse.Namespace) -> dict:
             )
         )
         else "stride"
+    )
+    parameters["cloud_frame_selection"] = (
+        base_frame_selection + "+gps-stationary-cap"
+        if cloud_config.stationary_speed_threshold_m_s is not None
+        else base_frame_selection
     )
     viewer_dir = Path(__file__).resolve().parent.parent / "viewer"
     output_dir = Path(args.output).expanduser().resolve()

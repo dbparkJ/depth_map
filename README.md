@@ -206,6 +206,22 @@ coverage는 81.03%라 90% 품질 guard는 아직 통과하지 못했다. 실제 
 `data/debug_stages/index.json`과 진단 이미지를 승인한 뒤 다음 청크를 실행하십시오.
 `--chunk-duration-seconds`는 `--start-frame` 또는 `--max-frames`와 함께 사용할 수 없습니다.
 
+GPS 정차 중 동일 위치의 점을 계속 누적하지 않으려면 아래 세 옵션을 함께 사용합니다.
+GPS 속도가 threshold 이하로 min duration 이상 연속된 구간마다 시작·중간·끝을 포함해
+cloud frame을 균등하게 최대 지정 개수만 남깁니다. 정차 중 제외된 프레임도 VO/trajectory
+연속성 계산에는 사용하지만 RGB-D 점군 투영·융합에서는 제외합니다. 옵션을 생략하면 기존
+동작을 유지하며 정차 제한을 적용하지 않습니다.
+
+```text
+--stationary-speed-threshold-m-s 0.30
+--stationary-min-duration-s 2.0
+--stationary-max-cloud-frames 5
+```
+
+이 데이터셋의 21개 청크를 GPS/timestamp만으로 사전 계산하면 정차 cloud 후보 3,819개 중
+70개를 보존하고 3,749개를 건너뜁니다. 실제 실행에서는 pose frame audit가 먼저 적용되므로
+최종 수치는 각 결과의 `summary.json`에 기록된 `stationary_*_frame_count`를 기준으로 봅니다.
+
 ### 전체 데이터를 60초 temporal 청크로 처리
 
 `2026-08-19_10-16-33_raw`은 동기화 RGB-D 13,283프레임, timestamp span 1,208.353초이므로
@@ -233,6 +249,9 @@ for CHUNK_INDEX in $(seq 0 20); do
     --max-points 40000000 \
     --browser-max-points 1000000 \
     --min-depth-m 0.7 \
+    --stationary-speed-threshold-m-s 0.30 \
+    --stationary-min-duration-s 2.0 \
+    --stationary-max-cloud-frames 5 \
     --chunk-duration-seconds 60 \
     --chunk-index "${CHUNK_INDEX}" \
     --postprocess-preset road-map-temporal \
@@ -246,9 +265,10 @@ done
 
 각 디렉터리에는 해당 구간의 `data/cloud_clean_enu.ply`가 별도로 생성됩니다. 모든 청크는
 데이터셋 첫 프레임의 공통 ENU 원점을 사용하지만, 위 명령은 청크 PLY를 마지막에 하나로
-병합하지 않습니다. 검증한 첫 60초 청크 하나는 1시간 3분 18초, peak RSS 17.43 GiB가
-걸렸으므로 21개 전체 순차 실행은 장시간 작업입니다. 마지막 `chunk-index 20`은 약
-8.35초 구간이라 앞선 청크보다 짧습니다.
+병합하지 않습니다. 정차 제한을 추가하기 전 검증한 첫 60초 청크 하나는 1시간 3분 18초,
+peak RSS 17.43 GiB가 걸렸으므로 21개 전체 순차 실행은 장시간 작업입니다. 정차 제한을
+적용한 새 실행시간은 별도로 측정해야 합니다. 마지막 `chunk-index 20`은 약 8.35초
+구간이라 앞선 청크보다 짧습니다.
 
 일반적인 주행 구간은 다음처럼 생성합니다.
 

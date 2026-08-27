@@ -44,6 +44,22 @@ class PointCloudBuildStats:
     coarse_support_rejected_count: int = 0
     points_before_quality_prefilter: int = 0
     points_after_quality_prefilter: int = 0
+    stationary_run_count: int = 0
+    stationary_candidate_frame_count: int = 0
+    stationary_retained_frame_count: int = 0
+    stationary_skipped_frame_count: int = 0
+
+
+@dataclass(frozen=True)
+class StationaryFrameSelection:
+    selected_indices: tuple[int, ...]
+    stationary_mask: np.ndarray
+    limited_stationary_mask: np.ndarray
+    skipped_mask: np.ndarray
+    run_count: int
+    candidate_frame_count: int
+    retained_frame_count: int
+    skipped_frame_count: int
 
 
 @dataclass(frozen=True)
@@ -344,6 +360,93 @@ def select_frame_indices(
     if selected[-1] != last_index:
         selected.append(last_index)
     return selected
+
+
+def limit_stationary_frame_indices(
+    frames: list[FrameRecord],
+    selected_indices: list[int],
+    gps_speed_m_s: np.ndarray,
+    *,
+    speed_threshold_m_s: float,
+    min_duration_s: float,
+    max_frames_per_run: int,
+) -> StationaryFrameSelection:
+    """Cap cloud frames in sustained GPS-stationary intervals.
+
+    Short low-speed samples are left unchanged. For every qualifying contiguous
+    interval, cloud candidates are sampled uniformly so its beginning, interior,
+    and end remain represented without accumulating every stopped frame.
+    """
+
+    if not frames:
+        raise ValueError("frames must not be empty")
+    speeds = np.asarray(gps_speed_m_s, dtype=np.float64)
+    if speeds.shape != (len(frames),):
+        raise ValueError("gps_speed_m_s must align with frames")
+    threshold = float(speed_threshold_m_s)
+    duration_threshold = float(min_duration_s)
+    if not np.isfinite(threshold) or threshold < 0.0:
+        raise ValueError("speed_threshold_m_s must be finite and non-negative")
+    if not np.isfinite(duration_threshold) or duration_threshold <= 0.0:
+        raise ValueError("min_duration_s must be finite and positive")
+    cap = _positive_int("max_frames_per_run", max_frames_per_run)
+
+    selected = np.asarray(selected_indices, dtype=np.int64)
+    if selected.ndim != 1 or len(selected) == 0:
+        raise ValueError("selected_indices must not be empty")
+    if np.any(selected < 0) or np.any(selected >= len(frames)):
+        raise ValueError("selected_indices contains an out-of-range frame")
+    if np.any(np.diff(selected) <= 0):
+        raise ValueError("selected_indices must be strictly increasing")
+
+    timestamps_ns = np.asarray(
+        [frame.monotonic_ns for frame in frames], dtype=np.int64
+    )
+    if np.any(np.diff(timestamps_ns) < 0):
+        raise ValueError("frame timestamps must be non-decreasing")
+    stationary = np.isfinite(speeds) & (speeds <= threshold)
+    limited = np.zeros(len(frames), dtype=bool)
+    skipped = np.zeros(len(frames), dtype=bool)
+    run_count = 0
+    candidate_count = 0
+    retained_count = 0
+
+    padded = np.concatenate(([False], stationary, [False]))
+    transitions = np.diff(padded.astype(np.int8))
+    run_starts = np.flatnonzero(transitions == 1)
+    run_ends = np.flatnonzero(transitions == -1) - 1
+    for start, end in zip(run_starts, run_ends, strict=True):
+        duration_s = float(timestamps_ns[end] - timestamps_ns[start]) / 1e9
+        if duration_s < duration_threshold:
+            continue
+        positions = np.flatnonzero((selected >= start) & (selected <= end))
+        if len(positions) == 0:
+            continue
+        run_count += 1
+        limited[start : end + 1] = True
+        candidate_count += len(positions)
+        retain_count = min(cap, len(positions))
+        retain_positions = np.linspace(
+            0, len(positions) - 1, retain_count, dtype=np.int64
+        )
+        retained_positions = positions[retain_positions]
+        retained_count += len(retained_positions)
+        discard_positions = np.setdiff1d(
+            positions, retained_positions, assume_unique=True
+        )
+        skipped[selected[discard_positions]] = True
+
+    final_selected = tuple(int(index) for index in selected[~skipped[selected]])
+    return StationaryFrameSelection(
+        selected_indices=final_selected,
+        stationary_mask=stationary,
+        limited_stationary_mask=limited,
+        skipped_mask=skipped,
+        run_count=run_count,
+        candidate_frame_count=candidate_count,
+        retained_frame_count=retained_count,
+        skipped_frame_count=int(np.count_nonzero(skipped)),
+    )
 
 
 def _validate_point_color_arrays(
@@ -1136,6 +1239,10 @@ def build_point_cloud(
     keyframe_distance_m: float | None = None,
     keyframe_angle_deg: float | None = None,
     keyframe_max_dt_s: float | None = None,
+    gps_speed_m_s: np.ndarray | None = None,
+    stationary_speed_threshold_m_s: float | None = None,
+    stationary_min_duration_s: float = 2.0,
+    stationary_max_cloud_frames: int = 5,
     depth_edge_filter: bool = False,
     depth_edge_radius_px: int = 1,
     depth_edge_abs_m: float = 0.18,
@@ -1192,6 +1299,34 @@ def build_point_cloud(
         selected = [index for index in selected if frame_audit.use_for_cloud[index]]
         if not selected:
             raise RuntimeError("frame audit excluded every cloud frame")
+    stationary_mask = np.zeros(len(frames), dtype=bool)
+    limited_stationary_mask = np.zeros(len(frames), dtype=bool)
+    stationary_skipped_mask = np.zeros(len(frames), dtype=bool)
+    stationary_run_count = 0
+    stationary_candidate_count = 0
+    stationary_retained_count = 0
+    stationary_skipped_count = 0
+    if stationary_speed_threshold_m_s is not None:
+        if gps_speed_m_s is None:
+            raise ValueError(
+                "gps_speed_m_s is required when stationary filtering is enabled"
+            )
+        stationary_selection = limit_stationary_frame_indices(
+            frames,
+            selected,
+            gps_speed_m_s,
+            speed_threshold_m_s=stationary_speed_threshold_m_s,
+            min_duration_s=stationary_min_duration_s,
+            max_frames_per_run=stationary_max_cloud_frames,
+        )
+        selected = list(stationary_selection.selected_indices)
+        stationary_mask = stationary_selection.stationary_mask
+        limited_stationary_mask = stationary_selection.limited_stationary_mask
+        stationary_skipped_mask = stationary_selection.skipped_mask
+        stationary_run_count = stationary_selection.run_count
+        stationary_candidate_count = stationary_selection.candidate_frame_count
+        stationary_retained_count = stationary_selection.retained_frame_count
+        stationary_skipped_count = stationary_selection.skipped_frame_count
     if depth_quality_policy is None:
         depth_quality_policy = DepthQualityPolicy(
             min_depth_m=float(min_depth_m),
@@ -1240,6 +1375,9 @@ def build_point_cloud(
     frame_reports: list[dict[str, Any]] = [
         {
             "cloud_selected": int(index in selected),
+            "gps_stationary": int(stationary_mask[index]),
+            "stationary_episode_limited": int(limited_stationary_mask[index]),
+            "stationary_cloud_skipped": int(stationary_skipped_mask[index]),
             "cloud_decoded": 0,
             "projection_candidate_count": 0,
             "depth_base_valid_count": 0,
@@ -1652,6 +1790,10 @@ def build_point_cloud(
         coarse_support_rejected_count=coarse_support_rejected,
         points_before_quality_prefilter=points_before_quality_prefilter,
         points_after_quality_prefilter=points_before_final_cap,
+        stationary_run_count=stationary_run_count,
+        stationary_candidate_frame_count=stationary_candidate_count,
+        stationary_retained_frame_count=stationary_retained_count,
+        stationary_skipped_frame_count=stationary_skipped_count,
     )
     return PointCloudResult(
         points_enu_m=points,

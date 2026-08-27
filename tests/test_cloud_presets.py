@@ -47,6 +47,9 @@ def test_balanced_is_default_and_preset_arguments_start_unresolved():
     assert args.per_frame_max_points is None
     assert args.roi_top_ratio is None
     assert args.roi_bottom_ratio is None
+    assert args.stationary_speed_threshold_m_s is None
+    assert args.stationary_min_duration_s == 2.0
+    assert args.stationary_max_cloud_frames == 5
     assert resolve_cloud_build_config(args) == CLOUD_PRESETS["balanced"]
 
 
@@ -86,6 +89,22 @@ def test_partial_keyframe_options_leave_unspecified_conditions_disabled():
     assert config.keyframe_max_dt_s == 0.5
 
 
+def test_stationary_cloud_frame_limit_options_resolve():
+    config = resolve_cloud_build_config(
+        parse_cloud_args(
+            "--stationary-speed-threshold-m-s",
+            "0.3",
+            "--stationary-min-duration-s",
+            "2.5",
+            "--stationary-max-cloud-frames",
+            "7",
+        )
+    )
+    assert config.stationary_speed_threshold_m_s == 0.3
+    assert config.stationary_min_duration_s == 2.5
+    assert config.stationary_max_cloud_frames == 7
+
+
 @pytest.mark.parametrize(
     ("options", "message"),
     [
@@ -98,6 +117,9 @@ def test_partial_keyframe_options_leave_unspecified_conditions_disabled():
         (("--roi-top-ratio", "0.99"), "cloud ROI"),
         (("--cloud-keyframe-angle-deg", "0"), "cloud-keyframe-angle-deg"),
         (("--cloud-keyframe-angle-deg", "181"), "must not exceed 180"),
+        (("--stationary-speed-threshold-m-s", "-0.1"), "non-negative"),
+        (("--stationary-min-duration-s", "0"), "stationary-min-duration"),
+        (("--stationary-max-cloud-frames", "0"), "stationary-max-cloud-frames"),
         (("--min-depth-m", "10", "--max-depth-m", "5"), "depth range"),
     ],
 )

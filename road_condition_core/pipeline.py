@@ -26,6 +26,7 @@ from .detectors import (
 from .geometry import project_to_trajectory, rasterize_road_surface, track_to_enu_xy
 from .models import AnalysisProducts, Defect, SegmentMetric, SurfaceGrid
 from .report import render_html_report
+from .report_v2 import generate_report_bundle
 from .roi import ZONE_TYPE_CODES, RoadRoi, classify_st
 
 
@@ -818,6 +819,7 @@ def write_analysis_products(output_dir: str | Path, products: AnalysisProducts) 
     )
     report = render_html_report(products.summary, defect_dicts, segment_dicts)
     (output / "report.html").write_text(report, encoding="utf-8")
+    generate_report_bundle(output, output / "report")
     return {
         "summary": "summary.json",
         "defects": "defects.json",
@@ -827,4 +829,9 @@ def write_analysis_products(output_dir: str | Path, products: AnalysisProducts) 
         "surface_preview": "surface_preview.json",
         "surface_npz": "surface.npz",
         "report_html": "report.html",
+        "report_v2_html": "report/report.html",
+        "report_v2_manifest": "report/report_manifest.json",
+        "report_v2_summary_csv": "report/summary.csv",
+        "report_v2_segments_csv": "report/segments.csv",
+        "report_v2_defects_csv": "report/defects.csv",
     }

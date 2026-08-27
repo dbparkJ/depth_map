@@ -43,6 +43,8 @@
 - [x] `surface_preview.json`
 - [x] `surface.npz`
 - [x] `report.html`
+- [x] report v2 HTML/CSV/manifest와 결함별 geometry evidence
+- [x] 별도 Chromium 이미지의 optional PDF renderer
 
 ### API
 
@@ -89,7 +91,7 @@
 - [~] position spread는 raw metadata가 있을 때 사용하지만 full provenance 활용 전이다.
 - [~] ENU GeoJSON은 local ENU이며 위경도 GeoJSON 변환 전이다.
 - [~] 유지보수 score recovery와 강우 계산은 planning/screening proxy다.
-- [~] HTML report는 구현했으나 PDF와 결함별 RGB evidence 전이다.
+- [~] HTML/CSV/PDF와 geometry evidence는 구현했으나 실제 결함별 RGB frame 연결 전이다.
 - [~] worker는 파일 기반 단일 host 구조이며 crash recovery queue 전이다.
 
 ## 3. 미완료 — 다음 우선순위
@@ -144,7 +146,7 @@ ground truth가 아직 `unknown`이다. 따라서 실험 threshold는 자동 승
 - [~] RGB evidence N/A 표시; 실제 frame 연결은 후속
 - [x] 선택 결함 횡·종단 residual profile
 - [x] low-confidence/recollection filter
-- [ ] PDF report
+- [x] HTML source-of-truth 기반 optional PDF report
 - [~] summary 기반 before/after job 비교; survey 정합은 후속
 
 ### P2: RGB AI

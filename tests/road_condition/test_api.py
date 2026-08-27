@@ -27,6 +27,7 @@ def test_health_and_synthetic_job(tmp_path) -> None:
         viewer = capabilities["web_viewer"]
         assert viewer["default_map_adapter"] == "local_enu"
         assert viewer["full_point_cloud_to_browser"] is False
+        assert capabilities["report_v2"]["missing_evidence_policy"] == "N/A_and_continue"
 
         response = client.post(
             "/api/v1/jobs",
@@ -56,6 +57,15 @@ def test_health_and_synthetic_job(tmp_path) -> None:
         assert summary.json()["results"]["pothole_count"] >= 1
         report = client.get(f"/api/v1/jobs/{job_id}/report")
         assert report.status_code == 200
+        assert "INTERNAL ROAD GEOMETRY EVIDENCE" in report.text
+        summary_csv = client.get(f"/api/v1/jobs/{job_id}/report/summary.csv")
+        assert summary_csv.status_code == 200
+        assert "internal_geometry_score" in summary_csv.text
+        escaped_report = client.get(
+            f"/api/v1/jobs/{job_id}/report/%2E%2E/summary.json",
+            follow_redirects=False,
+        )
+        assert escaped_report.status_code in {404, 422}
         scenario = client.post(
             f"/api/v1/jobs/{job_id}/scenarios",
             json={"rainfall_mm": 50},

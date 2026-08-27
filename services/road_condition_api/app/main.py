@@ -11,7 +11,7 @@ from typing import Any
 
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, RedirectResponse
 
 from road_condition_core.config import AnalysisConfig
 from road_condition_core.io import load_mapping_bundle, resolve_relative_path
@@ -122,6 +122,12 @@ def _run_job(
                 "mapping_format_version": bundle.summary.get("format_version"),
                 "capabilities": bundle.analysis_capabilities,
                 "calibration_status": bundle.analysis_quality["calibration_status"],
+                "dataset_id": (
+                    (bundle.analysis_source_manifest or {}).get("dataset_id")
+                ),
+                "mapping_commit_sha": (
+                    (bundle.analysis_source_manifest or {}).get("mapping_commit_sha")
+                ),
             }
             pose_context = (
                 {
@@ -298,6 +304,20 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 "full_point_cloud_to_browser": False,
                 "review_mutation": "planned_stage_10",
             },
+            "report_v2": {
+                "profile": "internal_korean_geometry_evidence_v2",
+                "source_of_truth": "html",
+                "input_contract": "summary_json_segments_json_defects_json",
+                "outputs": [
+                    "html",
+                    "summary_csv",
+                    "segments_csv",
+                    "defects_csv",
+                    "per_defect_evidence",
+                ],
+                "pdf": "optional_offline_chromium_cli",
+                "missing_evidence_policy": "N/A_and_continue",
+            },
             "pose_contract": {
                 "camera_poses_format_version": 1,
                 "analysis_source_manifest_format_version": 1,
@@ -314,6 +334,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 "maintenance_scenario",
                 "calibration_quality_metadata",
                 "advanced_geometry_screening",
+                "report_v2_evidence_package",
             ],
             "planned_outputs": [
                 "rgb_cracks",
@@ -431,20 +452,66 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     def get_surface(job_id: str, request: Request) -> Any:
         return result_json(job_id, "surface_preview.json", request)
 
-    @app.get("/api/v1/jobs/{job_id}/report")
-    def get_report(job_id: str, request: Request) -> FileResponse:
+    def report_file(job_id: str, request: Request, relative_path: str) -> FileResponse:
         try:
             status = get_store(request).read_status(job_id)
             if status.get("state") != "completed":
                 raise HTTPException(status_code=409, detail="job is not completed")
-            path = get_store(request).result_dir(job_id) / "report.html"
+            result_dir = get_store(request).result_dir(job_id)
+            report_root = (result_dir / "report").resolve()
+            if not report_root.is_dir():
+                if relative_path != "report.html":
+                    raise FileNotFoundError(relative_path)
+                path = (result_dir / "report.html").resolve()
+                try:
+                    path.relative_to(result_dir.resolve())
+                except ValueError as exc:
+                    raise ValueError("legacy report escapes result root") from exc
+            else:
+                path = (report_root / relative_path).resolve()
+                try:
+                    path.relative_to(report_root)
+                except ValueError as exc:
+                    raise ValueError("report asset escapes report root") from exc
+                allowed_suffixes = {".html", ".csv", ".json", ".png", ".jpg", ".svg", ".pdf"}
+                if path.suffix.lower() not in allowed_suffixes:
+                    raise ValueError("unsupported report asset")
             if not path.is_file():
                 raise FileNotFoundError(path)
-            return FileResponse(path, media_type="text/html; charset=utf-8")
+            return FileResponse(path)
+        except HTTPException:
+            raise
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=404, detail="report not found") from exc
+
+    @app.get("/api/v1/jobs/{job_id}/report", response_class=RedirectResponse)
+    def get_report(job_id: str, request: Request) -> RedirectResponse:
+        try:
+            status = get_store(request).read_status(job_id)
+            if status.get("state") != "completed":
+                raise HTTPException(status_code=409, detail="job is not completed")
         except HTTPException:
             raise
         except (ValueError, FileNotFoundError) as exc:
             raise HTTPException(status_code=404, detail="report not found") from exc
+        return RedirectResponse(
+            url=f"/api/v1/jobs/{job_id}/report/",
+            status_code=307,
+        )
+
+    @app.get("/api/v1/jobs/{job_id}/report/")
+    def get_report_index(job_id: str, request: Request) -> FileResponse:
+        return report_file(job_id, request, "report.html")
+
+    @app.get("/api/v1/jobs/{job_id}/report/{asset_path:path}")
+    def get_report_asset(
+        job_id: str,
+        asset_path: str,
+        request: Request,
+    ) -> FileResponse:
+        return report_file(job_id, request, asset_path)
 
     @app.post("/api/v1/jobs/{job_id}/scenarios")
     def scenario(job_id: str, payload: ScenarioRequest, request: Request) -> dict[str, Any]:

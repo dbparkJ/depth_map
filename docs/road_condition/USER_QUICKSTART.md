@@ -200,6 +200,7 @@ GET /api/v1/jobs/{id}/defects.enu.geojson
 GET /api/v1/jobs/{id}/segments
 GET /api/v1/jobs/{id}/surface
 GET /api/v1/jobs/{id}/report
+GET /api/v1/jobs/{id}/report/summary.csv
 ```
 
 ## 8. 권장 첫 실데이터 설정
@@ -427,3 +428,28 @@ fallback한다.
 키보드로 결함 표 행을 선택하려면 Enter/Space를 사용하고, 뷰어에 focus한 뒤 N/P로 다음/이전
 결함을 이동한다. 실패 tile은 manifest에 보이지만 완료 산출물처럼 열리지 않는다. 작업자
 수정·승인은 Stage 10 API와 함께 추가되므로 현재 뷰어는 read-only다.
+
+## 17. Stage 08 보고서 v2 재생성
+
+완료된 job의 `result/`에서 HTML, CSV, 결함별 geometry evidence를 결정적으로 다시 만든다.
+HTML이 기준 산출물이며 RGB 원본/overlay가 연결되지 않은 결함은 보고서에 `N/A`로 표시된다.
+
+```bash
+PYTHONPATH=. .venv/bin/python scripts/road_condition_report.py \
+  data/jobs/<job_id>/result
+```
+
+PDF가 필요하면 분석 API와 분리된 전용 이미지를 사용한다. 입력 result는 read-only로, 출력
+디렉터리만 writable로 마운트한다.
+
+```bash
+docker build -f docker/road_condition_report.Dockerfile \
+  -t depth-map-road-condition-report .
+docker run --rm \
+  -v "$PWD/data/jobs/<job_id>/result:/input:ro" \
+  -v "$PWD/report-output:/output" \
+  depth-map-road-condition-report /input --output /output --pdf
+```
+
+`report_manifest.json`에는 알고리즘 버전, 설정 hash, 입력 JSON hash, dataset ID, mapping commit
+SHA와 누락 evidence가 기록된다. 값이 없는 추적성 항목은 추정하지 않고 `N/A`로 유지한다.

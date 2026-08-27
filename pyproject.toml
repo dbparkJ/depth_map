@@ -16,9 +16,10 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-test = ["pytest>=8"]
+test = ["pytest>=8", "httpx2>=2,<3"]
 postprocess = ["open3d>=0.19"]
 route = ["pyarrow>=17,<24"]
+report = ["Pillow>=10,<13"]
 
 [project.scripts]
 rgbd-gps-map = "rgbd_map.cli:main"

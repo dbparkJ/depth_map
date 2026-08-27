@@ -226,6 +226,15 @@ SMRF로 ground class만 남기는 과정에서 실제 포트홀 내부점이 제
     surface_preview.json
     surface.npz
     report.html
+    report/                    # Stage 08 self-contained evidence package
+      report.html              # source of truth
+      report_manifest.json
+      summary.csv
+      segments.csv
+      defects.csv
+      report.pdf               # optional, separate Chromium renderer
+      figures/
+      evidence/<defect_id>/
 ```
 
 ### `summary.json`
@@ -296,7 +305,8 @@ SMRF로 ground class만 남기는 과정에서 실제 포트홀 내부점이 제
 | GET | `/api/v1/jobs/{id}/defects.enu.geojson` | ENU polygon |
 | GET | `/api/v1/jobs/{id}/segments` | 구간 metric |
 | GET | `/api/v1/jobs/{id}/surface` | 웹 surface preview |
-| GET | `/api/v1/jobs/{id}/report` | HTML 리포트 |
+| GET | `/api/v1/jobs/{id}/report` | report v2 HTML로 redirect |
+| GET | `/api/v1/jobs/{id}/report/{asset_path}` | report v2의 허용된 정적 산출물 |
 | POST | `/api/v1/jobs/{id}/scenarios` | 유지보수·강우 screening |
 | DELETE | `/api/v1/jobs/{id}` | 완료/실패 작업 삭제 |
 
@@ -458,3 +468,19 @@ manifest만 먼저 읽고 선택한 완료 tile의 summary/surface/defect/segmen
 선택과 명확한 fallback을 제공하지만 API key/token과 WGS84 변환 설정 전에는 basemap을
 활성화하지 않는다. 검수 수정·승인은 분석 API와 섞지 않고 Stage 10까지 read-only다. 경량 3D
 evidence는 downsampled surface preview만 사용하며 1×/2×/5× Z 강조를 지원한다.
+
+## 16. Stage 08 보고서 v2 계약
+
+보고서의 기준 데이터는 기존 `summary.json`, `segments.json`, `defects.json`이다. HTML을
+source of truth로 두고 CSV와 결함별 evidence를 같은 입력에서 결정적으로 재생성한다. PDF는
+분석 API 프로세스가 직접 Chromium을 실행하지 않도록 별도 report 이미지/CLI에서만 선택적으로
+렌더링한다.
+
+보고서에는 `algorithm_version`, 설정 SHA-256, 입력 JSON SHA-256, dataset ID, mapping commit
+SHA를 남긴다. 제공되지 않은 항목과 RGB 원본/overlay는 빈 파일을 만들지 않고 `N/A`와
+`missing` 목록으로 명시한다. 내부 형상 점수와 roughness proxy는 공식 PCI/IRI가 아니며,
+low-confidence 결함과 수집 재검토 필요 상태를 숨기지 않는다.
+
+API는 job result 내부 `report/`만 읽고 HTML/CSV/JSON/PNG/JPEG/SVG/PDF allowlist와 symlink
+confinement를 적용한다. 원본 mapping workspace는 계속 read-only이며 보고서 manifest에는 host
+절대 경로를 노출하지 않는다.

@@ -151,13 +151,19 @@ ground truth가 아직 `unknown`이다. 따라서 실험 threshold는 자동 승
 
 ### P2: RGB AI
 
-- [ ] road mask
-- [ ] crack segmentation
-- [ ] BEV multi-frame fusion
-- [ ] 길이·폭·면적
+- [~] road/depth/pose validity mask 입력 계약; road mask model은 미구현
+- [ ] crack segmentation model과 승인 weights
+- [~] projected pixel probability의 deterministic BEV 누적 계약
+- [~] skeleton/chamfer 기반 길이·폭·면적 candidate; 실측 검증 전
 - [ ] crack type
 - [ ] 패칭·박리·블리딩
-- [ ] GPU worker Dockerfile
+- [x] 별도 worker contract image와 model manifest/weights SHA fail-closed gate
+- [x] pixel/instance/length/100m FP/wet/shadow holdout metric 정의 고정
+- [ ] 승인된 GPU 환경·모델 adapter와 Compose worker
+
+Stage 09 시작 질문의 라벨 형식, 클래스, 최소 폭, RGB/노면 픽셀 해상도, wet/shadow/night 구성,
+GPU 환경은 모두 `unknown`이다. 합성 확률맵은 계약 검증에만 사용하며 정확도 acceptance나 모델
+승인을 대신하지 않는다.
 
 ### P2: 업무 시스템
 

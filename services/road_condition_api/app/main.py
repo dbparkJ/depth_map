@@ -318,6 +318,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 "pdf": "optional_offline_chromium_cli",
                 "missing_evidence_policy": "N/A_and_continue",
             },
+            "rgb_crack_ai": {
+                "contract_version": 1,
+                "worker_boundary": "services/road_condition_crack_worker",
+                "holdout_protocol": "road-condition-crack-holdout-v1",
+                "automatic_approval_enabled": False,
+                "neural_inference_state": "not_configured",
+                "geometry_api_contains_pytorch": False,
+                "reason": "labels, approved weights, metric thresholds, and GPU environment are not provided",
+            },
             "pose_contract": {
                 "camera_poses_format_version": 1,
                 "analysis_source_manifest_format_version": 1,
@@ -335,6 +344,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 "calibration_quality_metadata",
                 "advanced_geometry_screening",
                 "report_v2_evidence_package",
+                "rgb_crack_contract_and_holdout_gate",
             ],
             "planned_outputs": [
                 "rgb_cracks",

@@ -28,6 +28,9 @@ def test_health_and_synthetic_job(tmp_path) -> None:
         assert viewer["default_map_adapter"] == "local_enu"
         assert viewer["full_point_cloud_to_browser"] is False
         assert capabilities["report_v2"]["missing_evidence_policy"] == "N/A_and_continue"
+        crack = capabilities["rgb_crack_ai"]
+        assert crack["neural_inference_state"] == "not_configured"
+        assert crack["geometry_api_contains_pytorch"] is False
 
         response = client.post(
             "/api/v1/jobs",

@@ -484,3 +484,32 @@ low-confidence 결함과 수집 재검토 필요 상태를 숨기지 않는다.
 API는 job result 내부 `report/`만 읽고 HTML/CSV/JSON/PNG/JPEG/SVG/PDF allowlist와 symlink
 confinement를 적용한다. 원본 mapping workspace는 계속 read-only이며 보고서 manifest에는 host
 절대 경로를 노출하지 않는다.
+
+## 17. Stage 09 RGB 크랙 계약과 승인 게이트
+
+RGB 크랙 코드는 `services/road_condition_crack_worker/`에 분리하며 geometry API 이미지에는
+PyTorch나 모델 weights를 넣지 않는다. 입력 흐름은 road mask, depth validity, pose validity를
+모두 통과한 픽셀의 `(s,t)` projection과 segmentation probability만 BEV에 누적한다. pose가
+유효하지 않은 frame은 fail-closed로 제외한다.
+
+모델 manifest에는 라벨 형식, 클래스, 최소 폭, RGB/노면 픽셀 해상도, wet/shadow/night 포함
+여부, 학습·추론 GPU와 framework, weights SHA-256, holdout 결과와 명시적 승인자를 요구한다.
+manifest와 weights는 `/workspace` 아래 상대 경로만 허용하고 read-only로 검증한다.
+
+고정된 `road-condition-crack-holdout-v1`은 다음 metric을 요구한다.
+
+- pixel precision/recall/F1
+- IoU matching 기반 instance recall
+- matched instance 길이 절대오차
+- unmatched prediction 100m당 개수
+- wet/shadow subset pixel F1
+
+현재는 라벨, 픽셀 해상도, GPU, weights, 승인 threshold가 모두 미제공이다. 따라서 protocol의
+자동 승인은 꺼져 있고 neural inference adapter도 구성하지 않았다. 제공되는 Dockerfile은
+manifest/metric/BEV 후처리를 검증하는 contract image이며 운영 crack service가 아니다. 승인된
+모델 runtime이 추가되면 이 worker도 `compose.road-condition.yml`에서 함께 실행되도록 한 뒤
+서비스 완료로 전환한다.
+
+후처리 defect는 `source=rgb_ai`, model name/version/weights hash와
+`rgb_ai_experimental_unvalidated` flag를 갖는다. 작업자 수정 시 top-level prediction을 덮어쓰지
+않고 `original_prediction`, 그 SHA-256, revision actor/time/reason/patch를 모두 보존한다.

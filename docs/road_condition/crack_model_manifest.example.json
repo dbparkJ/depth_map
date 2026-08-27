@@ -1,0 +1,51 @@
+{
+  "format_version": 1,
+  "dataset": {
+    "dataset_id": null,
+    "split_manifest_sha256": null,
+    "label_format": null,
+    "classes": null,
+    "minimum_detection_width_mm": null,
+    "rgb_resolution_px": null,
+    "ground_sampling_distance_mm_per_px": null,
+    "conditions": {
+      "wet": null,
+      "shadow": null,
+      "night": null
+    }
+  },
+  "model": {
+    "name": null,
+    "version": null,
+    "weights_path": null,
+    "weights_sha256": null,
+    "runtime": null,
+    "input_resolution_px": null
+  },
+  "environment": {
+    "training_gpu": null,
+    "inference_gpu": null,
+    "framework": null,
+    "framework_version": null
+  },
+  "holdout_evaluation": {
+    "protocol_id": "road-condition-crack-holdout-v1",
+    "metrics": {
+      "pixel_precision": null,
+      "pixel_recall": null,
+      "pixel_f1": null,
+      "instance_recall": null,
+      "mean_absolute_length_error_m": null,
+      "false_positive_per_100m": null,
+      "wet_pixel_f1": null,
+      "shadow_pixel_f1": null
+    },
+    "acceptance_thresholds": null
+  },
+  "approval": {
+    "state": "not_approved",
+    "approved_by": null,
+    "approved_at": null,
+    "holdout_protocol_sha256": null
+  }
+}

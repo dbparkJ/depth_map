@@ -453,3 +453,39 @@ docker run --rm \
 
 `report_manifest.json`에는 알고리즘 버전, 설정 hash, 입력 JSON hash, dataset ID, mapping commit
 SHA와 누락 evidence가 기록된다. 값이 없는 추적성 항목은 추정하지 않고 `N/A`로 유지한다.
+
+## 18. Stage 09 RGB 크랙 계약 검증
+
+현재 이미지는 AI inference가 아니라 모델 승인·metric·BEV 후처리 계약을 검증한다. 라벨과
+승인 weights/GPU 정보가 없으므로 `ready_for_neural_inference=false`가 정상 상태다.
+
+```bash
+docker build -f services/road_condition_crack_worker/Dockerfile \
+  -t depth-map-road-condition-crack-contract .
+docker run --rm --network none \
+  depth-map-road-condition-crack-contract capabilities
+```
+
+모델 manifest는 예제를 복사해 모든 `null`을 실측/학습 정보로 채우고, weights와 함께
+`/workspace` 아래에 둔다. 입력 mount는 read-only다.
+
+```bash
+docker run --rm --network none \
+  -v "$PWD/artifacts:/workspace:ro" \
+  depth-map-road-condition-crack-contract \
+  verify-model --manifest crack/model_manifest.json
+```
+
+승인되지 않았거나 정보가 빠졌거나 SHA-256이 다른 모델은 exit code 2로 거부된다. holdout NPZ
+평가는 `truth_mask`, `probability` `[N,H,W]`, `route_length_m`, `wet`, `shadow` `[N]`을 요구한다.
+선택적으로 `truth_length_m`, `predicted_length_m` `[N]`을 넣는다.
+
+```bash
+docker run --rm --network none \
+  -v "$PWD/artifacts:/workspace:ro" \
+  depth-map-road-condition-crack-contract \
+  evaluate-npz /workspace/crack/holdout_predictions.npz
+```
+
+metric 정의는 고정됐지만 acceptance threshold는 아직 `N/A`이며 자동 승인은 비활성화다. 이
+contract image는 운영 service가 아니므로 현재 2-service Compose에는 넣지 않는다.

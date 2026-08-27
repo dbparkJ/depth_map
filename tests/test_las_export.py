@@ -9,6 +9,7 @@ from rgbd_map.las_export import (
     GroundFilterConfig,
     infer_utm_crs,
     make_export_plan,
+    make_file_export_plan,
     make_pdal_las_pipeline,
     read_ply_vertex_count,
 )
@@ -71,6 +72,20 @@ def test_read_ply_vertex_count_and_pipeline(tmp_path):
     projected = Transformer.from_crs("EPSG:4979", "EPSG:32652", always_xy=True)
     expected = projected.transform(126.84949888910248, 37.717401871308695, 44.5)
     np.testing.assert_allclose(plan.offset_xyz, expected, atol=1e-9)
+
+
+def test_make_file_export_plan_reads_adjacent_summary(tmp_path):
+    bundle = tmp_path / "result"
+    _write_bundle(bundle)
+    input_ply = bundle / "data" / "cloud_clean_enu.ply"
+
+    plan = make_file_export_plan(input_ply)
+
+    assert plan.input_ply == input_ply.resolve()
+    assert plan.stage == "clean"
+    assert plan.output_las == input_ply.with_name("cloud_clean_epsg32652.las")
+    assert plan.pipeline_json == input_ply.with_name("cloud_clean_epsg32652.pdal.json")
+    assert plan.report_json == input_ply.with_name("cloud_clean_epsg32652.report.json")
 
 
 def test_ground_only_pipeline_classifies_and_selects_ground(tmp_path):

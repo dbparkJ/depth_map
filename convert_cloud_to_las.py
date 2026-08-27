@@ -5,21 +5,34 @@ import argparse
 import json
 from pathlib import Path
 
-from rgbd_map.las_export import GroundFilterConfig, export_las, make_export_plan
+from rgbd_map.las_export import (
+    GroundFilterConfig,
+    export_las,
+    make_export_plan,
+    make_file_export_plan,
+)
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Convert a mapping ENU PLY cloud to a georeferenced LAS 1.4 file."
     )
-    parser.add_argument(
+    source = parser.add_mutually_exclusive_group(required=True)
+    source.add_argument(
         "--output",
-        required=True,
         type=Path,
         help="mapping output directory containing data/summary.json",
     )
+    source.add_argument(
+        "--file",
+        type=Path,
+        help="input PLY; summary.json must be in the same directory",
+    )
     parser.add_argument(
-        "--stage", choices=("raw", "clean", "removed"), default="clean"
+        "--stage",
+        choices=("raw", "clean", "removed"),
+        default="clean",
+        help="cloud stage used with --output (default: clean)",
     )
     parser.add_argument("--las", type=Path, help="output LAS path")
     parser.add_argument(
@@ -55,14 +68,16 @@ def main() -> int:
         if args.ground_only
         else None
     )
-    plan = make_export_plan(
-        args.output,
-        stage=args.stage,
-        output_las=args.las,
-        target_crs=args.target_crs,
-        scale_m=args.scale_m,
-        ground_filter=ground_filter,
-    )
+    common = {
+        "output_las": args.las,
+        "target_crs": args.target_crs,
+        "scale_m": args.scale_m,
+        "ground_filter": ground_filter,
+    }
+    if args.file is not None:
+        plan = make_file_export_plan(args.file, **common)
+    else:
+        plan = make_export_plan(args.output, stage=args.stage, **common)
     print(
         f"Converting {plan.source_point_count:,} points: {plan.input_ply}\n"
         f"Target: {plan.output_las} ({plan.target_crs.to_string()})\n"

@@ -121,18 +121,72 @@ def make_export_plan(
     output_path = Path(output_dir).expanduser().resolve()
     if stage not in STAGE_FILENAMES:
         raise ValueError(f"stage must be one of: {', '.join(STAGE_FILENAMES)}")
+
+    data_dir = output_path / "data"
+    return _make_export_plan_from_paths(
+        input_ply=data_dir / STAGE_FILENAMES[stage],
+        summary_path=data_dir / "summary.json",
+        stage=stage,
+        default_output_stem=f"cloud_{stage}",
+        output_las=output_las,
+        target_crs=target_crs,
+        scale_m=scale_m,
+        ground_filter=ground_filter,
+    )
+
+
+def make_file_export_plan(
+    input_ply: str | Path,
+    *,
+    output_las: str | Path | None = None,
+    target_crs: str | CRS | None = None,
+    scale_m: float = 0.001,
+    ground_filter: GroundFilterConfig | None = None,
+) -> LasExportPlan:
+    """Build an export plan for a PLY with summary.json in the same directory."""
+
+    input_path = Path(input_ply).expanduser().resolve()
+    if input_path.suffix.lower() != ".ply":
+        raise ValueError(f"input file must have a .ply extension: {input_path}")
+    if not input_path.is_file():
+        raise FileNotFoundError(f"point cloud not found: {input_path}")
+    reverse_stages = {filename: stage for stage, filename in STAGE_FILENAMES.items()}
+    stage = reverse_stages.get(input_path.name, input_path.stem)
+    output_stem = input_path.stem
+    if output_stem.endswith("_enu"):
+        output_stem = output_stem[: -len("_enu")]
+    return _make_export_plan_from_paths(
+        input_ply=input_path,
+        summary_path=input_path.parent / "summary.json",
+        stage=stage,
+        default_output_stem=output_stem,
+        output_las=output_las,
+        target_crs=target_crs,
+        scale_m=scale_m,
+        ground_filter=ground_filter,
+    )
+
+
+def _make_export_plan_from_paths(
+    *,
+    input_ply: Path,
+    summary_path: Path,
+    stage: str,
+    default_output_stem: str,
+    output_las: str | Path | None,
+    target_crs: str | CRS | None,
+    scale_m: float,
+    ground_filter: GroundFilterConfig | None,
+) -> LasExportPlan:
     if not math.isfinite(scale_m) or scale_m <= 0.0:
         raise ValueError("scale_m must be a positive finite number")
 
-    data_dir = output_path / "data"
-    summary_path = data_dir / "summary.json"
     if not summary_path.is_file():
         raise FileNotFoundError(f"mapping summary not found: {summary_path}")
     summary = json.loads(summary_path.read_text(encoding="utf-8"))
     origin = _origin_from_summary(summary)
-    input_ply = data_dir / STAGE_FILENAMES[stage]
     if not input_ply.is_file():
-        raise FileNotFoundError(f"{stage} point cloud not found: {input_ply}")
+        raise FileNotFoundError(f"point cloud not found: {input_ply}")
 
     crs = (
         infer_utm_crs(origin.origin_longitude_deg, origin.origin_latitude_deg)
@@ -148,11 +202,11 @@ def make_export_plan(
     target = (
         Path(output_las).expanduser().resolve()
         if output_las is not None
-        else data_dir
+        else input_ply.parent
         / (
-            f"cloud_{stage}_ground_epsg{crs.to_epsg() or 'custom'}.las"
+            f"{default_output_stem}_ground_epsg{crs.to_epsg() or 'custom'}.las"
             if ground_filter is not None
-            else f"cloud_{stage}_epsg{crs.to_epsg() or 'custom'}.las"
+            else f"{default_output_stem}_epsg{crs.to_epsg() or 'custom'}.las"
         )
     )
     pipeline_json = target.with_suffix(".pdal.json")

@@ -49,6 +49,7 @@ VWORLD_DOMAIN=http://127.0.0.1:8000
 ## 저장소 구조
 
 - `run_temporal_chunks.sh`: 새 데이터 전체를 60초 temporal 청크로 순차 처리하는 실행 파일
+- `convert_ply_to_las.sh`: PLY와 같은 폴더의 `summary.json`을 이용하는 LAS 변환 실행 파일
 - `rgbd_map/`: 매핑·후처리·LAS 변환 구현
 - `tests/`: 단위 및 회귀 테스트
 - `viewer/`: 브라우저 점군 뷰어
@@ -415,16 +416,14 @@ UTM zone을 자동 선택하고, 이 데이터의 경우 EPSG:32652가 LAS에 �
 metre, Z는 WGS 84 타원체고 metre이며 원본 8-bit RGB 값은 LAS RGB 필드에 보존합니다.
 
 ```bash
-conda run --no-capture-output -n depth-map-postprocess \
-  python convert_cloud_to_las.py \
-  --output artifacts/ultra_density_map_60sec_chunk_0000 \
-  --stage clean
+./convert_ply_to_las.sh \
+  --file artifacts/ultra_density_map_60sec_chunk_0000/data/cloud_clean_enu.ply
 ```
 
-기본 결과는 `data/cloud_clean_epsg32652.las`이고, 재현 가능한 PDAL pipeline과 좌표계,
-점 수, 경계 검증값은 각각 같은 위치의 `.pdal.json`, `.report.json`에 저장됩니다.
-`--stage raw|removed`, `--target-crs`, `--las`, `--scale-m`으로 입력 단계와 출력을 바꿀
-수 있습니다. 기존 LAS를 명시적으로 교체할 때만 `--overwrite`를 사용하십시오.
+입력 PLY와 `summary.json`은 같은 폴더에 있어야 합니다. 스크립트는 `summary.json`의 ENU
+원점을 읽고 입력 PLY 옆에 `cloud_clean_epsg32652.las`를 만듭니다. 재현 가능한 PDAL
+pipeline과 좌표계, 점 수, 경계 검증값도 같은 위치의 `.pdal.json`, `.report.json`으로
+저장됩니다. 기존 LAS를 명시적으로 교체할 때만 `--overwrite`를 추가하십시오.
 
 건물·수목·차량·부유점을 제외하고 지면만 LAS로 만들려면 `--ground-only`를 추가합니다.
 ELM으로 낮은 고립 노이즈를 먼저 제외하고 SMRF가 지면을 `Classification=2`로 분류한
@@ -432,11 +431,14 @@ ELM으로 낮은 고립 노이즈를 먼저 제외하고 SMRF가 지면을 `Clas
 않습니다.
 
 ```bash
-conda run --no-capture-output -n depth-map-postprocess \
-  python convert_cloud_to_las.py \
-  --output artifacts/ultra_density_map_60sec_chunk_0000_temporal_v1 \
-  --stage clean --ground-only
+./convert_ply_to_las.sh \
+  --file artifacts/ultra_density_map_60sec_chunk_0000_temporal_v1/data/cloud_clean_enu.ply \
+  --ground-only
 ```
+
+`--target-crs`, `--las`, `--scale-m`처럼 세부 옵션을 직접 지정할 때는
+`convert_cloud_to_las.py --file /경로/cloud.ply`를 사용하십시오. 기존 결과 디렉터리와
+단계를 지정하는 `--output ... --stage raw|clean|removed` 방식도 계속 지원합니다.
 
 기본값은 `--ground-cell-m 0.50`, `--ground-scalar 1.20`, `--ground-slope 0.15`,
 `--ground-threshold-m 0.20`, `--ground-window-m 8.0`입니다. 지면 누락이 많으면
@@ -468,6 +470,7 @@ IMU를 빼면 급격한 회전·정지·텍스처 부족 구간에서 자세가 
 .venv/bin/python map_rgbd_gps.py --help
 .venv/bin/python postprocess_cloud.py --help
 conda run -n depth-map-postprocess python convert_cloud_to_las.py --help
+bash -n run_temporal_chunks.sh convert_ply_to_las.sh
 ```
 
 실데이터 스모크 테스트는 입력이 유효할 때 `--max-frames 20` 이하로 한 번만 실행하고,

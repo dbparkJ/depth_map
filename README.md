@@ -363,6 +363,25 @@ jq '.cloud, .parameters.resolved_cloud_config, .parameters.resolved_postprocess_
   artifacts/balanced_map/data/summary.json
 ```
 
+### 좌표계가 포함된 LAS 변환
+
+로컬 ENU PLY를 측량/GIS 도구에서 바로 읽을 수 있는 LAS 1.4 point format 7로
+변환하려면 PDAL이 포함된 후처리 환경에서 다음을 실행합니다. 원점의 경위도로 WGS 84
+UTM zone을 자동 선택하고, 이 데이터의 경우 EPSG:32652가 LAS에 기록됩니다. X/Y는 UTM
+metre, Z는 WGS 84 타원체고 metre이며 원본 8-bit RGB 값은 LAS RGB 필드에 보존합니다.
+
+```bash
+conda run --no-capture-output -n depth-map-postprocess \
+  python convert_cloud_to_las.py \
+  --output artifacts/ultra_density_map_60sec_chunk_0000 \
+  --stage clean
+```
+
+기본 결과는 `data/cloud_clean_epsg32652.las`이고, 재현 가능한 PDAL pipeline과 좌표계,
+점 수, 경계 검증값은 각각 같은 위치의 `.pdal.json`, `.report.json`에 저장됩니다.
+`--stage raw|removed`, `--target-crs`, `--las`, `--scale-m`으로 입력 단계와 출력을 바꿀
+수 있습니다. 기존 LAS를 명시적으로 교체할 때만 `--overwrite`를 사용하십시오.
+
 통계가 비정상적으로 작다면 `sampled_frame_count`와 `decoded_frame_count`를 먼저 보고,
 그다음 `candidate_pixel_sample_count`, `valid_depth_sample_count_before_voxel`,
 `discarded_by_per_frame_cap`, `discarded_by_voxel`, `discarded_by_final_cap` 순서로 어느

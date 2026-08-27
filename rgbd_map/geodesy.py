@@ -53,3 +53,14 @@ class LocalENU:
         lon, lat, height = self._to_geo.transform(ecef[:, 0], ecef[:, 1], ecef[:, 2])
         return np.column_stack((lon, lat, height))
 
+    def enu_to_ecef_affine_matrix(self) -> np.ndarray:
+        """Return a row-major 4x4 affine transform from local ENU to ECEF.
+
+        The returned matrix follows the homogeneous column-vector convention
+        used by PDAL's ``filters.transformation`` stage.
+        """
+
+        matrix = np.eye(4, dtype=np.float64)
+        matrix[:3, :3] = self._ecef_to_enu.T
+        matrix[:3, 3] = self._origin_ecef
+        return matrix

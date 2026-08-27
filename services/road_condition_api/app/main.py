@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, HTTPException, Query, Request
+from fastapi import FastAPI, Header, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, RedirectResponse
 
@@ -32,7 +32,16 @@ from road_condition_core.roi import load_road_roi, resolve_roi_path
 from road_condition_core.scoring import load_scoring_profile, merge_profile_config
 from road_condition_core.synthetic import generate_synthetic_scene
 
-from .schemas import CreateJobRequest, ReviewRequest, ScenarioRequest, ScenarioV2Request
+from .rimms_store import RimmsContractStore
+from .schemas import (
+    RIMMS_REQUEST_CONTRACT_VERSION,
+    RIMMS_RESULT_CONTRACT_VERSION,
+    CreateJobRequest,
+    ReviewRequest,
+    RimmsJobRequest,
+    ScenarioRequest,
+    ScenarioV2Request,
+)
 from .route_view import read_route_manifest, read_route_tile_artifact
 from .store import JobStore
 
@@ -45,6 +54,7 @@ class Settings:
     cors_origins: tuple[str, ...] = ("http://localhost:8080", "http://127.0.0.1:8080")
     scoring_profiles_root: Path = Path("scoring_profiles")
     maintenance_catalogs_root: Path = Path("maintenance_catalogs")
+    rimms_contract_ingress_enabled: bool = False
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -66,6 +76,12 @@ class Settings:
             ),
             maintenance_catalogs_root=Path(
                 os.getenv("ROAD_CONDITION_MAINTENANCE_CATALOGS_ROOT", "maintenance_catalogs")
+            ),
+            rimms_contract_ingress_enabled=(
+                os.getenv("ROAD_CONDITION_RIMMS_CONTRACT_INGRESS_ENABLED", "false")
+                .strip()
+                .lower()
+                in {"1", "true", "yes", "on"}
             ),
         )
 
@@ -241,6 +257,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         "internal-planning-v1",
     )
     store = JobStore(resolved_settings.data_root)
+    rimms_store = RimmsContractStore(resolved_settings.data_root)
     executor = ThreadPoolExecutor(
         max_workers=resolved_settings.max_workers,
         thread_name_prefix="road-condition-job",
@@ -250,6 +267,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def lifespan(app: FastAPI):
         app.state.settings = resolved_settings
         app.state.store = store
+        app.state.rimms_store = rimms_store
         app.state.executor = executor
         yield
         executor.shutdown(wait=False, cancel_futures=False)
@@ -367,6 +385,24 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     default_maintenance_catalog.unpriced_components
                 ),
             },
+            "roadinventory_mms_integration": {
+                "request_contract_version": RIMMS_REQUEST_CONTRACT_VERSION,
+                "result_contract_version": RIMMS_RESULT_CONTRACT_VERSION,
+                "ingress_enabled": resolved_settings.rimms_contract_ingress_enabled,
+                "execution": "contract_only_no_object_fetch_or_external_network",
+                "authentication": "N/A_not_configured",
+                "object_storage_connector": "N/A_not_configured",
+                "job_completion": "N/A_connector_required",
+                "delivery_mode": "polling_only",
+                "callback": "disabled_fail_closed",
+                "idempotency_key": "required_hashed_at_rest",
+                "allowed_uri_schemes": ["s3", "gs", "az", "https"],
+                "source_of_truth": {
+                    "survey_route_identifiers": "RoadInventory-MMS",
+                    "raw_analysis_predictions": "road-condition analysis service",
+                    "reviewed_defect_sync": "N/A_direction_not_agreed",
+                },
+            },
             "report_v2": {
                 "profile": "internal_korean_geometry_evidence_v2",
                 "source_of_truth": "html",
@@ -411,6 +447,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 "versioned_scoring_profile",
                 "manual_review_audit_bundle",
                 "versioned_maintenance_catalog_and_budget_screening",
+                "rimms_uri_idempotency_contract",
             ],
             "planned_outputs": [
                 "rgb_cracks",
@@ -437,6 +474,62 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             store=job_store,
         )
         return status
+
+    def get_rimms_store(request: Request) -> RimmsContractStore:
+        if not request.app.state.settings.rimms_contract_ingress_enabled:
+            raise HTTPException(
+                status_code=503,
+                detail=(
+                    "RoadInventory-MMS contract ingress is disabled because "
+                    "authentication and object storage are not configured"
+                ),
+            )
+        return request.app.state.rimms_store
+
+    @app.post("/api/v1/integrations/rimms/jobs", status_code=202)
+    def create_rimms_job(
+        payload: RimmsJobRequest,
+        request: Request,
+        idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+    ) -> dict[str, Any]:
+        if idempotency_key is None:
+            raise HTTPException(status_code=428, detail="Idempotency-Key header is required")
+        try:
+            return get_rimms_store(request).create(
+                payload.model_dump(mode="json"),
+                idempotency_key,
+            )
+        except HTTPException:
+            raise
+        except RuntimeError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except (ValueError, json.JSONDecodeError) as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    @app.get("/api/v1/integrations/rimms/jobs")
+    def list_rimms_jobs(
+        request: Request,
+        limit: int = Query(default=50, ge=1, le=200),
+    ) -> dict[str, Any]:
+        try:
+            return {"jobs": get_rimms_store(request).list(limit)}
+        except HTTPException:
+            raise
+        except (RuntimeError, json.JSONDecodeError) as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    @app.get("/api/v1/integrations/rimms/jobs/{external_job_id}")
+    def get_rimms_job(external_job_id: str, request: Request) -> dict[str, Any]:
+        try:
+            return get_rimms_store(request).read(external_job_id)
+        except HTTPException:
+            raise
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=404, detail="RIMMS job not found") from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        except (RuntimeError, json.JSONDecodeError) as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
 
     @app.post("/api/v1/demo", status_code=202)
     def create_demo(request: Request, profile: str = Query(default="mixed")) -> dict[str, Any]:

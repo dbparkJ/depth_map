@@ -553,3 +553,36 @@ POST /api/v1/jobs/{job_id}/scenarios/v2
 `score_projection`은 비보정 planning estimate이고 실제 예측이 아니다. 반복 조사 자료가 없는
 현재 `deterioration.annual_rate`와 `projected_score`는 `null`이다. 기존 강우 screening이 필요한
 호환 클라이언트는 legacy `POST /api/v1/jobs/{job_id}/scenarios`를 계속 사용할 수 있다.
+
+## 21. Stage 12 RoadInventory-MMS contract 평가
+
+운영 기본값은 비활성화다. 인증과 object storage가 설정되지 않은 상태에서 활성화하지 않는다.
+격리된 로컬 계약 시험에서만 다음 환경값을 사용한다.
+
+```dotenv
+ROAD_CONDITION_RIMMS_CONTRACT_INGRESS_ENABLED=true
+```
+
+```text
+POST /api/v1/integrations/rimms/jobs
+Idempotency-Key: rimms-2026-001-attempt-1
+{
+  "contract_version": "road-condition-rimms-request-v1",
+  "expected_result_contract_version": "road-condition-rimms-result-v1",
+  "external_job_id": "rimms-2026-001",
+  "survey_id": "survey-20260827-001",
+  "route_id": "route-a",
+  "lane_id": null,
+  "mapping_bundle_uri": "s3://bucket/survey-001/mapping/",
+  "raw_dataset_uri": "s3://bucket/survey-001/raw/",
+  "road_roi_uri": "s3://bucket/survey-001/road_roi.geojson",
+  "config_profile_id": "internal-geometry-mvp-v1",
+  "callback_url": null
+}
+```
+
+같은 header와 같은 body의 재시도는 새 작업을 만들지 않고
+`idempotency_replayed=true`를 반환한다. 상태는
+`GET /api/v1/integrations/rimms/jobs/{external_job_id}`로 polling한다. 현재 정상 응답은
+`awaiting_connector_configuration`이며 completed 결과를 만들지 않는다. callback URL, signed
+query URI, 파일 본문 업로드는 거부된다.

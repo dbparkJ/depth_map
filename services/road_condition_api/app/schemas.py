@@ -2,7 +2,11 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+
+
+RIMMS_REQUEST_CONTRACT_VERSION = "road-condition-rimms-request-v1"
+RIMMS_RESULT_CONTRACT_VERSION = "road-condition-rimms-result-v1"
 
 
 class CreateJobRequest(BaseModel):
@@ -81,4 +85,57 @@ class ReviewRequest(BaseModel):
             raise ValueError("modified review requires after")
         if self.action != "modified" and self.after is not None:
             raise ValueError("after is only valid for modified review")
+        return self
+
+
+class RimmsJobRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    contract_version: str = Field(min_length=1, max_length=64)
+    expected_result_contract_version: str = Field(min_length=1, max_length=64)
+    external_job_id: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
+    survey_id: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
+    route_id: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
+    lane_id: str | None = Field(
+        default=None,
+        pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$",
+    )
+    mapping_bundle_uri: str = Field(min_length=1, max_length=2048)
+    raw_dataset_uri: str = Field(min_length=1, max_length=2048)
+    road_roi_uri: str | None = Field(default=None, min_length=1, max_length=2048)
+    config_profile_id: str = Field(
+        pattern=r"^[a-z0-9][a-z0-9._-]{0,63}$"
+    )
+    callback_url: str | None = Field(default=None, max_length=2048)
+
+    @field_validator("mapping_bundle_uri", "raw_dataset_uri", "road_roi_uri")
+    @classmethod
+    def validate_reference_uri(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        from urllib.parse import urlsplit
+
+        parsed = urlsplit(value)
+        if parsed.scheme not in {"s3", "gs", "az", "https"}:
+            raise ValueError("URI scheme must be one of s3, gs, az, https")
+        if not parsed.netloc or parsed.username or parsed.password:
+            raise ValueError("URI must have a host/bucket and no userinfo")
+        if parsed.query or parsed.fragment:
+            raise ValueError("URI query and fragment are not stored; use credential-free object URIs")
+        return value
+
+    @model_validator(mode="after")
+    def validate_contract(self) -> "RimmsJobRequest":
+        if self.contract_version != RIMMS_REQUEST_CONTRACT_VERSION:
+            raise ValueError(
+                "unsupported contract_version; expected "
+                f"{RIMMS_REQUEST_CONTRACT_VERSION}"
+            )
+        if self.expected_result_contract_version != RIMMS_RESULT_CONTRACT_VERSION:
+            raise ValueError(
+                "unsupported expected_result_contract_version; expected "
+                f"{RIMMS_RESULT_CONTRACT_VERSION}"
+            )
+        if self.callback_url is not None:
+            raise ValueError("callback mode is disabled; omit callback_url and use polling")
         return self

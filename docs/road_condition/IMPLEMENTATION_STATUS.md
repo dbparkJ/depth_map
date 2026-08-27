@@ -176,8 +176,11 @@ GPU 환경은 모두 `unknown`이다. 합성 확률맵은 계약 검증에만 �
 - [~] 기존 planning 예시 단가 version; 실제 승인 단가는 미제공
 - [~] 결정적 예산 risk screening; 수학적 최적화는 미구현
 - [~] 전후 점수 planning estimate; 실제 효과 예측/열화율은 미보정
-- [ ] `RoadInventory-MMS` API
-- [ ] object storage URI 계약
+- [~] `RoadInventory-MMS` polling ingress contract; 인증/실행 connector 전에는 기본 비활성화
+- [x] URI-only request, version mismatch, idempotency replay/conflict 계약
+- [ ] object storage 실제 connector와 credential
+- [ ] callback 서명/재시도 또는 polling 운영 방식 승인
+- [ ] reviewed defect source-of-truth와 동기화 방향 합의
 
 ### P3: 운영
 
@@ -197,7 +200,7 @@ GPU 환경은 모두 `unknown`이다. 합성 확률맵은 계약 검증에만 �
 로컬 정적·Python 검증 기준:
 
 ```text
-road-condition tests: 46 passed
+road-condition tests: 50 passed
 Python compileall: passed
 JavaScript node --check: passed
 Compose YAML parsing: passed

@@ -562,3 +562,30 @@ screening이다. 수학적 최적화나 안전 위험 모델로 주장하지 않
 후보 비율에 따른 `uncalibrated_planning_estimate_not_prediction`이며 실제 보수 효과 예측이
 아니다. 공간 정합된 반복 조사 자료가 없어 연간 열화율과 열화 후 점수는 모두
 `N/A_no_repeated_survey`다.
+
+## 20. Stage 12 RoadInventory-MMS contract ingress
+
+인증 방식, object storage, callback/polling 선택과 업무 ID schema가 제공되지 않았으므로 운영
+connector는 만들지 않았다. 기본 `ROAD_CONDITION_RIMMS_CONTRACT_INGRESS_ENABLED=false`이며
+endpoint는 HTTP 503으로 닫힌다. 격리된 contract 평가에서만 명시적으로 켤 수 있고, 켜더라도
+외부 URI를 읽거나 네트워크 callback을 호출하지 않는다. 수락된 작업 상태는
+`awaiting_connector_configuration`이다.
+
+요청은 `road-condition-rimms-request-v1`, 기대 결과는
+`road-condition-rimms-result-v1`과 정확히 일치해야 한다. 다른 version은 HTTP 422로 실패한다.
+body에는 최대 2,048자의 `s3`, `gs`, `az`, `https` URI 참조만 허용하며 파일 내용, userinfo,
+query, fragment와 `file://`은 거부한다. 이는 URI 형식 계약이지 해당 storage 지원 선언이 아니다.
+
+`Idempotency-Key` header는 필수다. 원문은 저장하지 않고 SHA-256만 저장하며, 같은 키와 같은
+canonical request 재시도는 기존 external job을 반환한다. 같은 키의 다른 요청 또는 같은
+external job ID의 다른 키는 HTTP 409다. callback URL은 인증/재시도 정책이 정해지기 전까지
+fail-closed로 거부하므로 delivery 재시도가 없으며, client는 GET polling만 사용한다.
+
+source of truth의 임시 경계는 다음과 같다.
+
+- 조사·노선·차로 식별자: `RoadInventory-MMS`
+- 변경 전 raw 분석 prediction: road-condition analysis service
+- 작업자 검수 결과의 최종 소유권과 동기화 방향: `N/A_direction_not_agreed`
+
+운영 완료 조건은 인증, object connector/credential, source-of-truth 합의, callback을 선택할 경우
+서명 검증과 retry/dead-letter 정책을 별도 승인하는 것이다.

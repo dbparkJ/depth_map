@@ -77,9 +77,34 @@
         <label class="toggle"><input id="showPotholes" type="checkbox" checked><span>포트홀</span></label>
         <label class="toggle"><input id="showRutting" type="checkbox" checked><span>러팅</span></label>
         <label class="toggle"><input id="showBumps" type="checkbox" checked><span>범프·솟음</span></label>
-        <label>높이 강조 배율 <output id="exaggerationValue">1×</output>
-          <input id="exaggeration" type="range" min="1" max="5" step="0.5" value="1">
+        <label class="toggle"><input id="showAdvanced" type="checkbox" checked><span>추가 형상 screening</span></label>
+        <label class="toggle"><input id="showLowConfidence" type="checkbox" checked><span>낮은 신뢰도 포함</span></label>
+        <label class="toggle"><input id="showLowCoverage" type="checkbox" checked><span>낮은 커버리지 구간</span></label>
+        <label>최소 신뢰도 <output id="confidenceValue">0%</output>
+          <input id="minimumConfidence" type="range" min="0" max="1" step="0.05" value="0">
         </label>
+        <label>높이 강조 배율
+          <select id="exaggeration"><option value="1">1×</option><option value="2">2×</option><option value="5">5×</option></select>
+        </label>
+      </section>
+
+      <section class="panel">
+        <h2>노선·날짜·타일 탐색</h2>
+        <label>완료 분석 작업
+          <select id="jobSelect" aria-label="완료 분석 작업 선택"><option value="">작업을 선택하세요</option></select>
+        </label>
+        <button id="openJobButton" class="button ghost full" disabled>선택 작업 열기</button>
+        <label>Route 결과 경로들
+          <textarea id="routePaths" rows="3" placeholder="route_a/road_condition/chunk_0000&#10;route_a/road_condition/chunk_0001"></textarea>
+        </label>
+        <p class="help">각 줄은 <code>/workspace</code> 아래 상대 경로입니다. manifest만 먼저 읽고 선택한 tile JSON 하나만 메모리에 유지합니다.</p>
+        <button id="loadRouteButton" class="button secondary full">Route manifest 열기</button>
+        <div id="routeStatus" class="scenario-result muted">Route dataset 미선택</div>
+        <div class="tile-nav" aria-label="Route 타일 이동">
+          <button id="previousTile" class="button ghost" disabled aria-label="이전 타일">←</button>
+          <select id="tileSelect" disabled aria-label="Route 타일 선택"><option>타일 없음</option></select>
+          <button id="nextTile" class="button ghost" disabled aria-label="다음 타일">→</button>
+        </div>
       </section>
 
       <section class="panel">
@@ -104,6 +129,7 @@
       </div>
 
       <div id="resultView" hidden>
+        <div id="renderRecovery" class="notice recovery" hidden role="alert"><strong>렌더링 컨텍스트가 중단되었습니다.</strong><button id="reloadViewer" class="button ghost">뷰어 새로고침</button></div>
         <section class="summary-grid">
           <article><span>형상 점수</span><strong id="geometryScore">-</strong><em id="geometryGrade">-</em></article>
           <article><span>포트홀</span><strong id="potholeCount">-</strong><small id="potholeArea">-</small></article>
@@ -122,15 +148,28 @@
               <span><i class="legend-swatch rise"></i>솟음</span>
             </div>
           </div>
-          <div class="canvas-wrap"><canvas id="surfaceCanvas"></canvas></div>
-          <div class="axis-note">가로: 진행거리 s · 세로: 횡방향 t · 색상: 기준 도로면 대비 높이 잔차</div>
+          <div class="viewer-toolbar">
+            <label>보기<select id="viewMode"><option value="plan">Local ST 평면</option><option value="perspective">3D evidence</option><option value="map">지도 adapter</option></select></label>
+            <label>지도 엔진<select id="mapAdapter"><option value="local_enu">Local ENU</option><option value="vworld">VWorld adapter</option><option value="cesium">Cesium adapter</option></select></label>
+            <span id="loadedTileLabel" class="status-pill">단일 job</span>
+          </div>
+          <div id="adapterNotice" class="help"></div>
+          <div class="canvas-wrap">
+            <canvas id="surfaceCanvas" tabindex="0" aria-label="Local ST 결함 지도. N과 P 키로 결함을 이동합니다."></canvas>
+            <canvas id="perspectiveCanvas" tabindex="0" aria-label="잔차 표면 3D evidence" hidden></canvas>
+            <canvas id="mapCanvas" tabindex="0" aria-label="Local ENU 지도 adapter" hidden></canvas>
+          </div>
+          <div id="axisNote" class="axis-note">가로: 진행거리 s · 세로: 횡방향 t · 색상: 기준 도로면 대비 높이 잔차</div>
         </section>
 
         <div class="detail-grid">
           <section class="panel">
             <div class="section-heading"><h2>선택 결함</h2><span id="selectedBadge" class="status-pill">미선택</span></div>
             <div id="defectDetail" class="muted">지도 또는 아래 표에서 결함을 선택하세요.</div>
-            <svg id="profileChart" viewBox="0 0 640 220" role="img" aria-label="선택 지점 횡단면"></svg>
+            <div class="profile-grid">
+              <svg id="profileChart" viewBox="0 0 640 220" role="img" aria-label="선택 지점 횡단면"></svg>
+              <svg id="longitudinalChart" viewBox="0 0 640 220" role="img" aria-label="선택 지점 종단면"></svg>
+            </div>
           </section>
           <section class="panel">
             <h2>구간별 상태</h2>
@@ -143,14 +182,22 @@
           <div class="table-scroll"><table id="defectTable"><thead><tr><th>ID</th><th>종류</th><th>차로/구역</th><th>체인리지</th><th>심각도</th><th>주요 측정값</th><th>신뢰도</th></tr></thead><tbody></tbody></table></div>
         </section>
 
+        <section class="panel">
+          <div class="section-heading"><h2>Before / after 작업 비교</h2><span class="muted">JSON summary 기준</span></div>
+          <div class="compare-row"><select id="compareJob" aria-label="비교할 완료 작업"><option value="">비교 작업 선택</option></select><button id="compareButton" class="button ghost" disabled>비교</button></div>
+          <div id="comparisonResult" class="scenario-result muted">완료 작업 두 개를 선택하면 내부 형상 점수·결함 수·커버리지 차이를 표시합니다.</div>
+        </section>
+
         <section class="notice">
           <strong>해석 주의</strong>
           <p>이 MVP의 점수는 내부 형상 점수이며 공식 PCI가 아닙니다. 평탄성 값도 IRI가 아닌 roughness proxy입니다. 실제 노선 적용 전 측량 기준 포트홀·러팅 및 평탄 기준면으로 보정해야 합니다.</p>
         </section>
+        <p class="keyboard-help">키보드: 결함 표에서 Enter/Space 선택 · 뷰어에서 N/P 결함 이동 · Route 타일은 좌우 버튼으로 이동</p>
       </div>
     </section>
   </main>
 
+  <script src="./viewer_core.js"></script>
   <script src="./app.js"></script>
 </body>
 </html>

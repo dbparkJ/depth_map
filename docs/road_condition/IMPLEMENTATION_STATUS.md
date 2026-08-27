@@ -136,13 +136,16 @@ ground truth가 아직 `unknown`이다. 따라서 실험 threshold는 자동 승
 
 ### P1: UI와 리포트
 
-- [ ] VWorld/Cesium 지도
+- [~] local ENU 지도와 VWorld/Cesium adapter 경계; 외부 key/token·WGS84 설정 전 fallback
+- [x] route manifest + 선택 tile JSON 점진 로드, 전체 PLY 브라우저 전송 금지
+- [x] 경량 3D evidence와 1×/2×/5× Z 강조
+- [x] segment grade/low coverage/confidence/quality layer
 - [ ] 위경도 defect GeoJSON
-- [ ] RGB evidence
-- [ ] 종단 profile
-- [ ] low-confidence/recollection layer
+- [~] RGB evidence N/A 표시; 실제 frame 연결은 후속
+- [x] 선택 결함 횡·종단 residual profile
+- [x] low-confidence/recollection filter
 - [ ] PDF report
-- [ ] before/after survey
+- [~] summary 기반 before/after job 비교; survey 정합은 후속
 
 ### P2: RGB AI
 

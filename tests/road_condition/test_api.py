@@ -24,6 +24,9 @@ def test_health_and_synthetic_job(tmp_path) -> None:
         screening = capabilities["experimental_geometry_screening"]
         assert screening["default_mode"] == "disabled"
         assert len(screening["feature_flags"]) == 4
+        viewer = capabilities["web_viewer"]
+        assert viewer["default_map_adapter"] == "local_enu"
+        assert viewer["full_point_cloud_to_browser"] is False
 
         response = client.post(
             "/api/v1/jobs",

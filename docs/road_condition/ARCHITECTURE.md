@@ -438,3 +438,23 @@ geometry defect와 점수 계산은 계속된다.
 물고임 기능은 폐쇄 함몰 기하만 계산한다. 배수구 위치가 없는 현재 입력으로 drainage capacity나
 침수 예측을 만들지 않는다. 모든 Stage 06 threshold는 실측 holdout으로 보정되기 전까지
 experimental이며 자동 승인하지 않는다.
+
+## 15. Stage 07 웹 점진 로드 계약
+
+웹 앱은 기존 `viewer/`와 결합하지 않고 `services/road_condition_web/`에 유지한다. API는
+`/workspace` 아래 상대 route 결과만 다음 read-only endpoint로 노출한다.
+
+```text
+GET /api/v1/route-datasets/manifest?path=<relative-route-result>
+GET /api/v1/route-datasets/tile?path=...&tile_id=tile-000000&artifact=surface
+```
+
+manifest 응답은 host 절대 경로와 내부 artifact 경로를 제거한다. tile ID는 고정 형식,
+artifact는 JSON allowlist, 파일 크기는 25MB 상한으로 검증한다. 브라우저는 여러 60초 청크의
+manifest만 먼저 읽고 선택한 완료 tile의 summary/surface/defect/segment GeoJSON·JSON만
+메모리에 유지한다. PLY endpoint는 제공하지 않는다.
+
+기본 지도는 외부 네트워크가 필요 없는 local ENU evidence renderer다. VWorld/Cesium은 adapter
+선택과 명확한 fallback을 제공하지만 API key/token과 WGS84 변환 설정 전에는 basemap을
+활성화하지 않는다. 검수 수정·승인은 분석 API와 섞지 않고 Stage 10까지 read-only다. 경량 3D
+evidence는 downsampled surface preview만 사용하며 1×/2×/5× Z 강조를 지원한다.

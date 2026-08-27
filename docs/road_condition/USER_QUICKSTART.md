@@ -408,3 +408,22 @@ offset은 실제 trajectory seam 검토 후 확정해야 한다. 현재 merge to
 단차 결과는 맨홀/구조물 `candidate`, 물 관련 결과는 `ponding_screening_proxy`다. 맨홀 자산
 DB와 배수구 위치가 없으므로 자산 확정, 배수 용량, 침수 예측은 제공하지 않는다. 종단 profile의
 `roughness_proxy_m`도 표준 IRI가 아니며 실측 비교 장비로 보정하기 전에는 내부 실험값이다.
+
+## 16. Stage 07 route 타일 뷰어
+
+웹의 **노선·날짜·타일 탐색**에서 Stage 05 route 결과 디렉터리를 `/workspace` 기준 상대 경로로
+한 줄에 하나씩 입력한다.
+
+```text
+route_a/road_condition/chunk_0000
+route_a/road_condition/chunk_0001
+```
+
+웹은 manifest를 먼저 읽고 선택한 tile JSON만 점진 로드한다. 전체 PLY는 브라우저로 전송하지
+않는다. Local ST, 경량 3D evidence, local ENU 지도 보기를 전환할 수 있고 Z 강조는 1×/2×/5×다.
+VWorld/Cesium은 runtime key/token과 WGS84 변환이 설정되지 않은 현재 Compose에서 local ENU로
+fallback한다.
+
+키보드로 결함 표 행을 선택하려면 Enter/Space를 사용하고, 뷰어에 focus한 뒤 N/P로 다음/이전
+결함을 이동한다. 실패 tile은 manifest에 보이지만 완료 산출물처럼 열리지 않는다. 작업자
+수정·승인은 Stage 10 API와 함께 추가되므로 현재 뷰어는 read-only다.

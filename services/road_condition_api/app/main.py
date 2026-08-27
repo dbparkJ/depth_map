@@ -28,6 +28,7 @@ from road_condition_core.roi import load_road_roi, resolve_roi_path
 from road_condition_core.synthetic import generate_synthetic_scene
 
 from .schemas import CreateJobRequest, ScenarioRequest
+from .route_view import read_route_manifest, read_route_tile_artifact
 from .store import JobStore
 
 
@@ -287,6 +288,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     "route_segments_parquet",
                 ],
             },
+            "web_viewer": {
+                "default_map_adapter": "local_enu",
+                "external_map_adapters": {
+                    "vworld": "runtime_key_and_wgs84_configuration_required",
+                    "cesium": "runtime_token_and_wgs84_configuration_required",
+                },
+                "route_loading": "manifest_then_one_selected_tile_json",
+                "full_point_cloud_to_browser": False,
+                "review_mutation": "planned_stage_10",
+            },
             "pose_contract": {
                 "camera_poses_format_version": 1,
                 "analysis_source_manifest_format_version": 1,
@@ -341,6 +352,42 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.get("/api/v1/jobs")
     def list_jobs(request: Request, limit: int = Query(default=50, ge=1, le=200)) -> dict[str, Any]:
         return {"jobs": get_store(request).list_statuses(limit)}
+
+    @app.get("/api/v1/route-datasets/manifest")
+    def get_route_manifest(
+        request: Request,
+        path: str = Query(min_length=1, max_length=1024),
+    ) -> dict[str, Any]:
+        try:
+            return read_route_manifest(
+                request.app.state.settings.workspace_root,
+                path,
+            )
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=404, detail="route dataset not found") from exc
+        except (ValueError, json.JSONDecodeError) as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    @app.get("/api/v1/route-datasets/tile")
+    def get_route_tile_artifact(
+        request: Request,
+        path: str = Query(min_length=1, max_length=1024),
+        tile_id: str = Query(min_length=1, max_length=64),
+        artifact: str = Query(min_length=1, max_length=64),
+    ) -> Any:
+        try:
+            return read_route_tile_artifact(
+                request.app.state.settings.workspace_root,
+                path,
+                tile_id,
+                artifact,
+            )
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=404, detail="route tile not found") from exc
+        except RuntimeError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except (ValueError, json.JSONDecodeError) as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     @app.get("/api/v1/jobs/{job_id}")
     def get_job(job_id: str, request: Request) -> dict[str, Any]:

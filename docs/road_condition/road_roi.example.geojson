@@ -1,0 +1,55 @@
+{
+  "type": "FeatureCollection",
+  "format_version": 1,
+  "coordinate_system": "local_road_ST_metres",
+  "features": [
+    {
+      "type": "Feature",
+      "properties": {
+        "zone_id": "road-0001",
+        "zone_type": "road",
+        "lane_id": null,
+        "chainage_start_m": 0.0,
+        "chainage_end_m": 120.0,
+        "source": "manual",
+        "confidence": 1.0
+      },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [[[0.0, -3.5], [120.0, -3.5], [120.0, 3.5], [0.0, 3.5], [0.0, -3.5]]]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "zone_id": "lane-L1-0001",
+        "zone_type": "lane",
+        "lane_id": "L1",
+        "chainage_start_m": 0.0,
+        "chainage_end_m": 120.0,
+        "source": "manual",
+        "confidence": 1.0
+      },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [[[0.0, -3.0], [120.0, -3.0], [120.0, 0.0], [0.0, 0.0], [0.0, -3.0]]]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "zone_id": "exclusion-intersection-0001",
+        "zone_type": "exclusion",
+        "lane_id": null,
+        "chainage_start_m": 40.0,
+        "chainage_end_m": 48.0,
+        "source": "manual",
+        "confidence": 1.0
+      },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [[[40.0, -3.5], [48.0, -3.5], [48.0, 3.5], [40.0, 3.5], [40.0, -3.5]]]
+      }
+    }
+  ]
+}

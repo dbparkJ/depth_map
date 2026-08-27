@@ -43,6 +43,10 @@
             <input id="mappingPath" type="text" placeholder="route_a/temporal_60sec/chunk_0000">
           </label>
           <p class="help">Compose의 <code>ROAD_CONDITION_WORKSPACE</code>로 마운트한 디렉터리를 기준으로 입력합니다.</p>
+          <label>도로 ROI 상대 경로(선택)
+            <input id="roadRoiPath" type="text" placeholder="data/road_roi.geojson">
+          </label>
+          <p class="help">비워두면 bundle의 <code>data/road_roi.geojson</code>을 자동 탐색하고, 없으면 기존 trajectory corridor를 사용합니다.</p>
           <label>점군 단계
             <select id="cloudStage">
               <option value="raw">raw — 포트홀 보존 우선</option>
@@ -69,6 +73,7 @@
       <section class="panel">
         <h2>표시 레이어</h2>
         <label class="toggle"><input id="showResidual" type="checkbox" checked><span>높이 잔차 히트맵</span></label>
+        <label class="toggle"><input id="showRoi" type="checkbox" checked><span>ROI·unknown·exclusion</span></label>
         <label class="toggle"><input id="showPotholes" type="checkbox" checked><span>포트홀</span></label>
         <label class="toggle"><input id="showRutting" type="checkbox" checked><span>러팅</span></label>
         <label class="toggle"><input id="showBumps" type="checkbox" checked><span>범프·솟음</span></label>
@@ -129,13 +134,13 @@
           </section>
           <section class="panel">
             <h2>구간별 상태</h2>
-            <div class="table-scroll"><table id="segmentTable"><thead><tr><th>구간</th><th>커버리지</th><th>포트홀</th><th>러팅</th><th>점수</th><th>등급</th></tr></thead><tbody></tbody></table></div>
+            <div class="table-scroll"><table id="segmentTable"><thead><tr><th>구간</th><th>차로</th><th>커버리지</th><th>포트홀</th><th>러팅</th><th>점수</th><th>등급</th></tr></thead><tbody></tbody></table></div>
           </section>
         </div>
 
         <section class="panel">
           <div class="section-heading"><h2>검출 결함 목록</h2><span id="defectCountLabel" class="muted"></span></div>
-          <div class="table-scroll"><table id="defectTable"><thead><tr><th>ID</th><th>종류</th><th>체인리지</th><th>심각도</th><th>주요 측정값</th><th>신뢰도</th></tr></thead><tbody></tbody></table></div>
+          <div class="table-scroll"><table id="defectTable"><thead><tr><th>ID</th><th>종류</th><th>차로/구역</th><th>체인리지</th><th>심각도</th><th>주요 측정값</th><th>신뢰도</th></tr></thead><tbody></tbody></table></div>
         </section>
 
         <section class="notice">

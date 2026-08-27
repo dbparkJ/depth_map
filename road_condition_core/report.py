@@ -32,6 +32,7 @@ def render_html_report(summary: dict[str, Any], defects: list[dict[str, Any]], s
             "<tr>"
             f"<td>{html.escape(str(defect.get('defect_id', '')))}</td>"
             f"<td>{html.escape(str(defect.get('defect_type', '')))}</td>"
+            f"<td>{html.escape(str(defect.get('lane_id') or defect.get('road_zone', 'unknown')))}</td>"
             f"<td>{html.escape(str(defect.get('severity', '')))}</td>"
             f"<td>{_fmt(defect.get('chainage_m'), 1, ' m')}</td>"
             f"<td>{html.escape(primary)}</td>"
@@ -44,6 +45,7 @@ def render_html_report(summary: dict[str, Any], defects: list[dict[str, Any]], s
         segment_rows.append(
             "<tr>"
             f"<td>{html.escape(str(segment.get('segment_id', '')))}</td>"
+            f"<td>{html.escape(str(segment.get('lane_id') or 'all'))}</td>"
             f"<td>{_fmt(segment.get('chainage_start_m'), 1)}–{_fmt(segment.get('chainage_end_m'), 1)} m</td>"
             f"<td>{_fmt(100 * float(segment.get('valid_coverage_ratio', 0)), 1, '%')}</td>"
             f"<td>{int(segment.get('pothole_count', 0))}</td>"
@@ -94,10 +96,10 @@ small{{color:#627d98}}
   <div class="card">분석 점 수<strong>{int(quality.get('analyzed_point_count', 0)):,}</strong></div>
 </div>
 <section><h2>구간별 결과</h2><table>
-<thead><tr><th>구간</th><th>체인리지</th><th>커버리지</th><th>포트홀</th><th>최대 깊이</th><th>최대 러팅</th><th>점수</th><th>등급</th></tr></thead>
+<thead><tr><th>구간</th><th>차로</th><th>체인리지</th><th>커버리지</th><th>포트홀</th><th>최대 깊이</th><th>최대 러팅</th><th>점수</th><th>등급</th></tr></thead>
 <tbody>{''.join(segment_rows)}</tbody></table></section>
 <section><h2>결함 상세</h2><table>
-<thead><tr><th>ID</th><th>종류</th><th>심각도</th><th>체인리지</th><th>주요 측정값</th><th>신뢰도</th></tr></thead>
-<tbody>{''.join(defect_rows) if defect_rows else '<tr><td colspan="6">검출된 결함이 없습니다.</td></tr>'}</tbody></table></section>
+<thead><tr><th>ID</th><th>종류</th><th>차로/구역</th><th>심각도</th><th>체인리지</th><th>주요 측정값</th><th>신뢰도</th></tr></thead>
+<tbody>{''.join(defect_rows) if defect_rows else '<tr><td colspan="7">검출된 결함이 없습니다.</td></tr>'}</tbody></table></section>
 <section class="notice"><h2>해석 제한</h2><ul>{limitations}</ul></section>
 </main></body></html>"""

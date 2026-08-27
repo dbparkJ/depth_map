@@ -19,6 +19,9 @@ class SurfaceGrid:
     trajectory_enu_m: np.ndarray
     trajectory_cumulative_m: np.ndarray
     source_origin: dict[str, float] | None = None
+    roi_zone_code: np.ndarray | None = None
+    roi_lane_index: np.ndarray | None = None
+    roi_lane_ids: tuple[str, ...] = ()
 
     @property
     def cell_area_m2(self) -> float:
@@ -41,6 +44,8 @@ class Defect:
     metrics: dict[str, float]
     quality_flags: list[str] = field(default_factory=list)
     source: str = "geometry"
+    lane_id: str | None = None
+    road_zone: str = "corridor_fallback"
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -75,6 +80,8 @@ class SegmentMetric:
     roughness_proxy_m: float
     geometry_score: float
     grade: str
+    lane_id: str | None = None
+    road_zone: str = "corridor_fallback"
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)

@@ -11,6 +11,7 @@ class CreateJobRequest(BaseModel):
     source_type: Literal["synthetic", "mapping_bundle"] = "synthetic"
     synthetic_profile: Literal["flat", "potholes", "rutting", "mixed"] = "mixed"
     mapping_output_path: str | None = None
+    road_roi_path: str | None = None
     point_cloud_stage: Literal["raw", "clean", "removed"] = "raw"
     config: dict[str, Any] = Field(default_factory=dict)
 
@@ -20,6 +21,8 @@ class CreateJobRequest(BaseModel):
             raise ValueError("mapping_output_path is required for mapping_bundle")
         if self.source_type == "synthetic" and self.mapping_output_path:
             raise ValueError("mapping_output_path is only valid for mapping_bundle")
+        if self.source_type == "synthetic" and self.road_roi_path:
+            raise ValueError("road_roi_path is only valid for mapping_bundle")
         return self
 
 

@@ -90,6 +90,8 @@
       request.synthetic_profile = $("syntheticProfile").value;
     } else {
       request.mapping_output_path = $("mappingPath").value.trim();
+      const roiPath = $("roadRoiPath").value.trim();
+      if (roiPath) request.road_roi_path = roiPath;
     }
     return request;
   }
@@ -204,7 +206,7 @@
     for (const defect of state.defects) {
       const row = document.createElement("tr");
       row.dataset.defectId = defect.defect_id;
-      row.innerHTML = `<td>${defect.defect_id}</td><td>${defectName(defect.defect_type)}</td><td>${format(defect.chainage_m, 1)} m</td><td class="severity-${defect.severity}">${defect.severity}</td><td>${defectPrimaryMetric(defect)}</td><td>${format(number(defect.confidence) * 100, 0)}%</td>`;
+      row.innerHTML = `<td>${defect.defect_id}</td><td>${defectName(defect.defect_type)}</td><td>${defect.lane_id || defect.road_zone || "unknown"}</td><td>${format(defect.chainage_m, 1)} m</td><td class="severity-${defect.severity}">${defect.severity}</td><td>${defectPrimaryMetric(defect)}</td><td>${format(number(defect.confidence) * 100, 0)}%</td>`;
       row.addEventListener("click", () => selectDefect(defect.defect_id));
       body.appendChild(row);
     }
@@ -216,7 +218,7 @@
     for (const segment of state.segments) {
       const rut = Math.max(number(segment.max_left_rut_depth_m), number(segment.max_right_rut_depth_m));
       const row = document.createElement("tr");
-      row.innerHTML = `<td>${format(segment.chainage_start_m, 0)}–${format(segment.chainage_end_m, 0)} m</td><td>${format(number(segment.valid_coverage_ratio) * 100, 0)}%</td><td>${segment.pothole_count} / ${format(number(segment.max_pothole_depth_m) * 1000, 0)} mm</td><td>${format(rut * 1000, 0)} mm</td><td>${format(segment.geometry_score, 1)}</td><td>${segment.grade}</td>`;
+      row.innerHTML = `<td>${format(segment.chainage_start_m, 0)}–${format(segment.chainage_end_m, 0)} m</td><td>${segment.lane_id || "전체"}</td><td>${format(number(segment.valid_coverage_ratio) * 100, 0)}%</td><td>${segment.pothole_count} / ${format(number(segment.max_pothole_depth_m) * 1000, 0)} mm</td><td>${format(rut * 1000, 0)} mm</td><td>${format(segment.geometry_score, 1)}</td><td>${segment.grade}</td>`;
       body.appendChild(row);
     }
   }
@@ -272,6 +274,19 @@
         const row = state.surface.residual_mm[i];
         for (let j = 0; j < t.length; j++) {
           ctx.fillStyle = residualColor(row[j], exaggeration);
+          ctx.fillRect(xOf(s[i]) - dx / 2, yOf(t[j]) - dy / 2, dx + 1, dy + 1);
+        }
+      }
+    }
+    if ($("showRoi").checked && state.surface.roi?.applied) {
+      const dx = plotWidth / Math.max(1, s.length - 1);
+      const dy = plotHeight / Math.max(1, t.length - 1);
+      const overlay = { 0: "rgba(115,128,140,.72)", 3: "rgba(245,166,35,.28)", 4: "rgba(255,70,70,.55)" };
+      for (let i = 0; i < s.length; i++) {
+        for (let j = 0; j < t.length; j++) {
+          const color = overlay[state.surface.roi.zone_code[i][j]];
+          if (!color) continue;
+          ctx.fillStyle = color;
           ctx.fillRect(xOf(s[i]) - dx / 2, yOf(t[j]) - dy / 2, dx + 1, dy + 1);
         }
       }
@@ -355,7 +370,7 @@
     }
     $("selectedBadge").textContent = `${defectName(defect.defect_type)} · ${defect.severity}`;
     const flags = (defect.quality_flags || []).length ? defect.quality_flags.join(", ") : "없음";
-    $("defectDetail").innerHTML = `<strong>${defect.defect_id}</strong><p>체인리지 ${format(defect.chainage_m, 2)} m · 횡방향 ${format(defect.lateral_offset_m, 2)} m</p><p>측정: ${defectPrimaryMetric(defect)} · 신뢰도 ${format(number(defect.confidence) * 100, 0)}%</p><p class="muted">품질 플래그: ${flags}</p>`;
+    $("defectDetail").innerHTML = `<strong>${defect.defect_id}</strong><p>차로/구역 ${defect.lane_id || defect.road_zone || "unknown"} · 체인리지 ${format(defect.chainage_m, 2)} m · 횡방향 ${format(defect.lateral_offset_m, 2)} m</p><p>측정: ${defectPrimaryMetric(defect)} · 신뢰도 ${format(number(defect.confidence) * 100, 0)}%</p><p class="muted">품질 플래그: ${flags}</p>`;
     renderProfile(defect.chainage_m);
   }
 
@@ -428,7 +443,7 @@
   $("runButton").addEventListener("click", () => createJob(false));
   $("scenarioButton").addEventListener("click", calculateScenario);
   $("surfaceCanvas").addEventListener("click", selectFromCanvas);
-  ["showResidual", "showPotholes", "showRutting", "showBumps"].forEach((id) => $(id).addEventListener("change", renderSurface));
+  ["showResidual", "showRoi", "showPotholes", "showRutting", "showBumps"].forEach((id) => $(id).addEventListener("change", renderSurface));
   $("exaggeration").addEventListener("input", (event) => { $("exaggerationValue").textContent = `${event.target.value}×`; renderSurface(); });
   window.addEventListener("resize", () => { if (state.surface) renderSurface(); });
 

@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import math
 import os
+from dataclasses import replace
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -16,9 +17,10 @@ from .detectors import (
     detect_rutting,
     roughness_proxy,
 )
-from .geometry import rasterize_road_surface, track_to_enu_xy
+from .geometry import project_to_trajectory, rasterize_road_surface, track_to_enu_xy
 from .models import AnalysisProducts, Defect, SegmentMetric, SurfaceGrid
 from .report import render_html_report
+from .roi import ZONE_TYPE_CODES, RoadRoi, classify_st
 
 
 ALGORITHM_VERSION = "road-condition-geometry-mvp-1"
@@ -82,6 +84,7 @@ def _band_roughness_for_rows(
     row_mask: np.ndarray,
     wheel_offset_m: float,
     band_half_width_m: float,
+    cell_mask: np.ndarray | None = None,
 ) -> float:
     band = (
         (np.abs(grid.t_values_m + wheel_offset_m) <= band_half_width_m)
@@ -91,6 +94,8 @@ def _band_roughness_for_rows(
         return 0.0
     residual = grid.residual_m[row_mask][:, band].astype(np.float64)
     valid = grid.valid_mask[row_mask][:, band]
+    if cell_mask is not None:
+        valid &= np.asarray(cell_mask, dtype=bool)[row_mask][:, band]
     values = residual[valid]
     if len(values) == 0:
         return 0.0
@@ -102,7 +107,18 @@ def _segment_metrics(
     defects: list[Defect],
     rut_series: RutSeries,
     config: AnalysisConfig,
+    *,
+    cell_mask: np.ndarray | None = None,
+    lane_id: str | None = None,
+    road_zone: str = "corridor_fallback",
 ) -> list[SegmentMetric]:
+    selected_cells = (
+        np.ones_like(grid.valid_mask, dtype=bool)
+        if cell_mask is None
+        else np.asarray(cell_mask, dtype=bool)
+    )
+    if selected_cells.shape != grid.valid_mask.shape:
+        raise ValueError("segment cell mask must align with surface grid")
     segment_length = config.detection.segment_length_m
     start = math.floor(float(grid.s_values_m[0]) / segment_length) * segment_length
     end = float(grid.s_values_m[-1]) + 0.5 * config.surface.grid_size_m
@@ -111,14 +127,41 @@ def _segment_metrics(
     while start < end - 1e-6:
         stop = min(start + segment_length, end)
         rows = (grid.s_values_m >= start) & (grid.s_values_m < stop + 1e-9)
-        total_cells = int(np.count_nonzero(rows)) * len(grid.t_values_m)
-        valid_cells = int(np.count_nonzero(grid.valid_mask[rows]))
+        total_cells = int(np.count_nonzero(selected_cells[rows]))
+        if total_cells == 0:
+            start += segment_length
+            index += 1
+            continue
+        valid_cells = int(np.count_nonzero(grid.valid_mask[rows] & selected_cells[rows]))
         coverage = valid_cells / total_cells if total_cells else 0.0
-        local_defects = [item for item in defects if start <= item.chainage_m < stop]
+        local_defects = [
+            item
+            for item in defects
+            if start <= item.chainage_m < stop
+            and (lane_id is None or item.lane_id == lane_id)
+        ]
         potholes = [item for item in local_defects if item.defect_type == "pothole"]
         bumps = [item for item in local_defects if item.defect_type == "bump"]
-        left_rows = rows & np.isfinite(rut_series.left_depth_m)
-        right_rows = rows & np.isfinite(rut_series.right_depth_m)
+        left_band = (
+            np.abs(grid.t_values_m + config.detection.rut_wheel_offset_m)
+            <= config.detection.rut_band_half_width_m
+        )
+        right_band = (
+            np.abs(grid.t_values_m - config.detection.rut_wheel_offset_m)
+            <= config.detection.rut_band_half_width_m
+        )
+        left_selected_rows = (
+            np.any(selected_cells[:, left_band], axis=1)
+            if np.any(left_band)
+            else np.zeros(len(rows), dtype=bool)
+        )
+        right_selected_rows = (
+            np.any(selected_cells[:, right_band], axis=1)
+            if np.any(right_band)
+            else np.zeros(len(rows), dtype=bool)
+        )
+        left_rows = rows & left_selected_rows & np.isfinite(rut_series.left_depth_m)
+        right_rows = rows & right_selected_rows & np.isfinite(rut_series.right_depth_m)
         max_left = (
             float(np.max(rut_series.left_depth_m[left_rows])) if np.any(left_rows) else 0.0
         )
@@ -130,6 +173,7 @@ def _segment_metrics(
             rows,
             config.detection.rut_wheel_offset_m,
             config.detection.rut_band_half_width_m,
+            selected_cells,
         )
         road_area = valid_cells * grid.cell_area_m2
         score = _geometry_score(
@@ -144,7 +188,11 @@ def _segment_metrics(
             score = min(score, 59.9)
         segments.append(
             SegmentMetric(
-                segment_id=f"segment-{index:04d}",
+                segment_id=(
+                    f"lane-{lane_id}-segment-{index:04d}"
+                    if lane_id is not None
+                    else f"segment-{index:04d}"
+                ),
                 chainage_start_m=float(start),
                 chainage_end_m=float(stop),
                 valid_coverage_ratio=float(coverage),
@@ -167,6 +215,8 @@ def _segment_metrics(
                 roughness_proxy_m=roughness,
                 geometry_score=score,
                 grade=_grade(score),
+                lane_id=lane_id,
+                road_zone=road_zone,
             )
         )
         start += segment_length
@@ -282,6 +332,7 @@ def analyze_points(
     source_origin: dict[str, float] | None = None,
     pose_context: Mapping[str, np.ndarray] | None = None,
     quality_context: Mapping[str, Any] | None = None,
+    road_roi: RoadRoi | None = None,
 ) -> AnalysisProducts:
     resolved_config = config or AnalysisConfig()
     resolved_config.validate()
@@ -310,6 +361,44 @@ def analyze_points(
         prepared_metadata,
         resolved_config.surface.max_input_points,
     )
+    sampled_count_before_roi = len(points)
+    roi_quality: dict[str, Any] = {
+        "roi_applied": False,
+        "roi_source": "trajectory_corridor_fallback",
+        "roi_input_point_count": int(len(points)),
+        "roi_retained_point_count": int(len(points)),
+    }
+    if road_roi is not None:
+        coordinates = project_to_trajectory(points, trajectory_enu_m)
+        point_zones = classify_st(
+            coordinates.along_track_m,
+            coordinates.signed_cross_track_m,
+            road_roi,
+        )
+        retained = point_zones.included_surface_mask
+        roi_input_count = len(retained)
+        retained_count = int(np.count_nonzero(retained))
+        if retained_count < resolved_config.surface.reference_min_cells:
+            raise ValueError(
+                "road ROI retained too few points for reference surface fitting"
+            )
+        points = points[retained]
+        colors = colors[retained]
+        metadata = {
+            name: np.asarray(values)[retained]
+            for name, values in metadata.items()
+            if np.asarray(values).shape == (len(retained),)
+        }
+        roi_quality = {
+            "roi_applied": True,
+            "roi_source": (
+                str(road_roi.source_path) if road_roi.source_path is not None else "inline"
+            ),
+            "roi_input_point_count": int(roi_input_count),
+            "roi_retained_point_count": retained_count,
+            "roi_excluded_point_count": int(roi_input_count - retained_count),
+            "lane_ids": list(road_roi.lane_ids),
+        }
     grid = rasterize_road_surface(
         points,
         trajectory_enu_m,
@@ -317,6 +406,38 @@ def analyze_points(
         position_std_m=metadata.get("position_std_m"),
         source_origin=source_origin,
     )
+    grid_zone_type: np.ndarray | None = None
+    grid_lane_id: np.ndarray | None = None
+    if road_roi is not None:
+        s_grid, t_grid = np.meshgrid(grid.s_values_m, grid.t_values_m, indexing="ij")
+        grid_zones = classify_st(s_grid.ravel(), t_grid.ravel(), road_roi)
+        grid_zone_type = grid_zones.zone_type.reshape(grid.valid_mask.shape)
+        grid_lane_id = grid_zones.lane_id.reshape(grid.valid_mask.shape)
+        included_grid = np.isin(grid_zone_type, ("road", "lane"))
+        lane_ids = road_roi.lane_ids
+        lane_lookup = {value: index + 1 for index, value in enumerate(lane_ids)}
+        lane_index = np.zeros(grid.valid_mask.shape, dtype=np.uint16)
+        for value, index in lane_lookup.items():
+            lane_index[grid_lane_id == value] = index
+        zone_code = np.zeros(grid.valid_mask.shape, dtype=np.uint8)
+        for zone_type, code in ZONE_TYPE_CODES.items():
+            zone_code[grid_zone_type == zone_type] = code
+        grid = replace(
+            grid,
+            valid_mask=grid.valid_mask & included_grid,
+            residual_m=np.where(included_grid, grid.residual_m, np.nan).astype(np.float32),
+            roi_zone_code=zone_code,
+            roi_lane_index=lane_index,
+            roi_lane_ids=lane_ids,
+        )
+        roi_quality.update(
+            {
+                "roi_corridor_coverage_ratio": float(np.mean(included_grid)),
+                "roi_unknown_area_ratio": float(np.mean(grid_zone_type == "unknown")),
+                "roi_exclusion_area_ratio": float(np.mean(grid_zone_type == "exclusion")),
+                "roi_shoulder_area_ratio": float(np.mean(grid_zone_type == "shoulder")),
+            }
+        )
     potholes = detect_potholes(grid, resolved_config.detection)
     bumps = detect_bumps(grid, resolved_config.detection)
     ruts, rut_series = detect_rutting(grid, resolved_config.detection)
@@ -324,6 +445,20 @@ def analyze_points(
         [*potholes, *bumps, *ruts],
         key=lambda item: (item.chainage_m, item.defect_type, item.defect_id),
     )
+    if road_roi is not None and defects:
+        defect_zones = classify_st(
+            np.asarray([item.chainage_m for item in defects]),
+            np.asarray([item.lateral_offset_m for item in defects]),
+            road_roi,
+        )
+        defects = [
+            replace(
+                item,
+                lane_id=(str(defect_zones.lane_id[index]) or None),
+                road_zone=str(defect_zones.zone_type[index]),
+            )
+            for index, item in enumerate(defects)
+        ]
     roughness = roughness_proxy(
         grid,
         resolved_config.detection.rut_wheel_offset_m,
@@ -347,7 +482,26 @@ def analyze_points(
     coverage_ratio = valid_cells / total_cells if total_cells else 0.0
     if coverage_ratio < resolved_config.detection.minimum_valid_coverage_ratio:
         score = min(score, 59.9)
-    segments = _segment_metrics(grid, defects, rut_series, resolved_config)
+    segments = _segment_metrics(
+        grid,
+        defects,
+        rut_series,
+        resolved_config,
+        road_zone="road" if road_roi is not None else "corridor_fallback",
+    )
+    if grid_lane_id is not None:
+        for lane_id in road_roi.lane_ids if road_roi is not None else ():
+            segments.extend(
+                _segment_metrics(
+                    grid,
+                    defects,
+                    rut_series,
+                    resolved_config,
+                    cell_mask=grid_lane_id == lane_id,
+                    lane_id=lane_id,
+                    road_zone="lane",
+                )
+            )
     summary = {
         "format_version": 1,
         "algorithm_version": ALGORITHM_VERSION,
@@ -357,7 +511,7 @@ def analyze_points(
         "quality": {
             "original_point_count": int(original_count),
             "analyzed_point_count": int(len(points)),
-            "point_sampling_applied": bool(original_count != len(points)),
+            "point_sampling_applied": bool(original_count != sampled_count_before_roi),
             "supported_surface_cell_count": valid_cells,
             "total_surface_cell_count": total_cells,
             "median_points_per_valid_cell": float(
@@ -368,6 +522,7 @@ def analyze_points(
             ),
             **dict(quality_context or {}),
             "pose_surface_mode": reprojection_quality,
+            **roi_quality,
         },
         "coverage": {
             "chainage_start_m": float(grid.s_values_m[0]),
@@ -533,6 +688,25 @@ def write_analysis_products(output_dir: str | Path, products: AnalysisProducts) 
         "reference_local_up_m": _json_matrix(np.where(valid, reference, np.nan)),
         "display_range_mm": [-120.0, 120.0],
     }
+    if products.surface.roi_zone_code is not None:
+        preview["roi"] = {
+            "applied": True,
+            "zone_code": products.surface.roi_zone_code[np.ix_(s_keep, t_keep)]
+            .astype(int)
+            .tolist(),
+            "zone_code_legend": {
+                str(code): name for name, code in ZONE_TYPE_CODES.items()
+            },
+            "lane_index": products.surface.roi_lane_index[np.ix_(s_keep, t_keep)]
+            .astype(int)
+            .tolist(),
+            "lane_ids": list(products.surface.roi_lane_ids),
+        }
+    else:
+        preview["roi"] = {
+            "applied": False,
+            "fallback": "trajectory_corridor",
+        }
     _atomic_json(output / "surface_preview.json", preview)
     np.savez_compressed(
         output / "surface.npz",
@@ -544,6 +718,16 @@ def write_analysis_products(output_dir: str | Path, products: AnalysisProducts) 
         point_count=products.surface.point_count,
         position_std_m=products.surface.position_std_m,
         valid_mask=products.surface.valid_mask,
+        roi_zone_code=(
+            products.surface.roi_zone_code
+            if products.surface.roi_zone_code is not None
+            else np.empty((0, 0), dtype=np.uint8)
+        ),
+        roi_lane_index=(
+            products.surface.roi_lane_index
+            if products.surface.roi_lane_index is not None
+            else np.empty((0, 0), dtype=np.uint16)
+        ),
     )
     report = render_html_report(products.summary, defect_dicts, segment_dicts)
     (output / "report.html").write_text(report, encoding="utf-8")

@@ -111,8 +111,10 @@ ground truth가 아직 `unknown`이다. 따라서 실험 threshold는 자동 승
 
 ### P1: 도로 ROI와 전체 노선
 
-- [ ] `road_roi.geojson`
-- [ ] lane/shoulder/exclusion zone
+- [x] local-ST `road_roi.geojson` strict loader와 안전한 bundle 상대 경로
+- [x] lane/shoulder/exclusion zone precedence와 surface filtering
+- [x] 결함 lane/zone attribution, 차로별 segment, ROI/unknown coverage
+- [x] ROI 부재 시 기존 trajectory corridor fallback
 - [ ] 10m core + halo tile
 - [ ] 청크 경계 defect deduplication
 - [ ] route manifest

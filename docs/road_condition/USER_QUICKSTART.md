@@ -338,3 +338,24 @@ PYTHONPATH=. .venv/bin/python scripts/road_condition_calibrate.py \
 
 결과는 기본적으로 `<mapping>/calibration/` 아래 manifest, flat-surface noise JSON,
 포트홀/러팅 ground-truth worksheet, threshold recommendation과 HTML report로 기록된다.
+
+## 13. Stage 04 수동 도로 ROI
+
+예시는 [`road_roi.example.geojson`](road_roi.example.geojson)이다. 좌표는 위경도가 아니라
+trajectory를 따른 진행거리 `s`와 횡방향 `t` metre다. 파일을 mapping bundle의
+`data/road_roi.geojson`에 두면 API가 자동 탐색한다. 다른 이름이면 웹/API의
+`road_roi_path`에 bundle 기준 상대 경로를 지정한다.
+
+```json
+{
+  "source_type": "mapping_bundle",
+  "mapping_output_path": "route_a/chunk_0000",
+  "road_roi_path": "data/road_roi.geojson",
+  "point_cloud_stage": "raw"
+}
+```
+
+ROI feature에는 `zone_id`, `zone_type`, `chainage_start_m`, `chainage_end_m`, `source`,
+`confidence`가 필요하고 lane에는 `lane_id`도 필요하다. exclusion이 항상 최우선이며
+shoulder와 unknown은 surface fitting에서 제외된다. ROI가 없으면 기존 corridor 분석으로
+자동 fallback한다.

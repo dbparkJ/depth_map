@@ -136,6 +136,7 @@ Compose에서 호스트 디렉터리를 `/workspace`로 마운트한다. API에�
 <output>/data/summary.json
 <output>/data/camera_poses.npz           # Stage 03 이후 optional frame pose
 <output>/data/analysis_source_manifest.json # Stage 03 이후 optional calibration provenance
+<output>/data/road_roi.geojson          # Stage 04 이후 optional local-ST ROI
 ```
 
 `clean` 또는 `removed`를 지정하면 해당 PLY를 읽는다. 포트홀 보존을 위해 기본값은 `raw`다.
@@ -145,6 +146,12 @@ Compose에서 호스트 디렉터리를 `/workspace`로 마운트한다. API에�
 `unknown` 또는 `estimated`이면 `manual_review_required`다. `T_enu_camera`는 optical camera
 XYZ(right/down/forward)를 local ENU로 옮기는 4×4 행렬이며 모든 변환은
 `T_target_source` 열벡터 규칙을 사용한다.
+
+`road_roi.geojson`은 `format_version=1`, `coordinate_system=local_road_ST_metres`인
+FeatureCollection이다. `road`, `lane`, `shoulder`, `exclusion` Polygon/MultiPolygon을
+허용하며 우선순위는 exclusion > lane > shoulder > road다. 분석 surface에는 road/lane만
+포함하고 shoulder는 별도 class로 보존한다. ROI가 없으면 기존 trajectory corridor를 그대로
+사용한다.
 
 ### 4.3 PLY 제한
 

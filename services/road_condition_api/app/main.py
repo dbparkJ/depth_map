@@ -24,6 +24,7 @@ from road_condition_core.pipeline import (
     analyze_points,
     write_analysis_products,
 )
+from road_condition_core.roi import load_road_roi, resolve_roi_path
 from road_condition_core.synthetic import generate_synthetic_scene
 
 from .schemas import CreateJobRequest, ScenarioRequest
@@ -99,6 +100,7 @@ def _run_job(
             }
             pose_context = None
             quality_context = None
+            road_roi = None
         else:
             resolved = resolve_relative_path(
                 settings.workspace_root,
@@ -129,6 +131,27 @@ def _run_job(
                 else None
             )
             quality_context = bundle.analysis_quality
+            roi_path = None
+            if request.road_roi_path:
+                roi_path = resolve_roi_path(resolved, request.road_roi_path)
+                if not roi_path.is_file():
+                    raise FileNotFoundError(f"road ROI file not found: {request.road_roi_path}")
+            else:
+                for candidate in (
+                    resolved / "data" / "road_roi.geojson",
+                    resolved / "road_roi.geojson",
+                ):
+                    if candidate.is_file():
+                        roi_path = candidate
+                        break
+            road_roi = load_road_roi(roi_path) if roi_path is not None else None
+            source["road_roi"] = {
+                "applied": road_roi is not None,
+                "path": (
+                    str(roi_path.relative_to(resolved)) if roi_path is not None else None
+                ),
+                "fallback": "trajectory_corridor" if road_roi is None else None,
+            }
         store.update_status(
             job_id,
             progress=0.25,
@@ -144,6 +167,7 @@ def _run_job(
             source_origin=source_origin,
             pose_context=pose_context,
             quality_context=quality_context,
+            road_roi=road_roi,
         )
         store.update_status(
             job_id,
@@ -226,6 +250,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "format_version": 1,
             "sources": ["synthetic", "mapping_bundle"],
             "geometry_detectors": ["pothole", "rutting", "bump"],
+            "road_roi": {
+                "format": "GeoJSON Polygon/MultiPolygon in local_road_ST_metres",
+                "zone_types": ["road", "lane", "shoulder", "exclusion"],
+                "precedence": ["exclusion", "lane", "shoulder", "road"],
+                "fallback": "trajectory_corridor",
+            },
             "pose_contract": {
                 "camera_poses_format_version": 1,
                 "analysis_source_manifest_format_version": 1,

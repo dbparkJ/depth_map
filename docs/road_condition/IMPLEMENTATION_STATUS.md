@@ -90,7 +90,8 @@
 - [~] 실제 `depth_map` 결과 loader는 구현했으나 대표 실데이터 acceptance run 전이다.
 - [~] position spread는 raw metadata가 있을 때 사용하지만 full provenance 활용 전이다.
 - [~] ENU GeoJSON은 local ENU이며 위경도 GeoJSON 변환 전이다.
-- [~] 유지보수 score recovery와 강우 계산은 planning/screening proxy다.
+- [~] legacy 유지보수 score recovery와 강우 계산은 planning/screening proxy다.
+- [~] v2 공법/단가 catalog와 예산 우선순위는 구현했으나 실제 단가·반복 조사 보정 전이다.
 - [~] HTML/CSV/PDF와 geometry evidence는 구현했으나 실제 결함별 RGB frame 연결 전이다.
 - [~] worker는 파일 기반 단일 host 구조이며 crash recovery queue 전이다.
 
@@ -171,9 +172,10 @@ GPU 환경은 모두 `unknown`이다. 합성 확률맵은 계약 검증에만 �
 - [x] 완료 job 작업자 승인·심각도 수정·거절·재수집 UI/API
 - [x] raw prediction 불변 SHA와 before/after/version audit bundle
 - [~] actor는 인증 신원이 아닌 audit label; 관리자 2단계 승인 전
-- [ ] 보수공법 catalog
-- [ ] 실제 단가 version
-- [ ] 예산 최적화
+- [x] experimental 보수공법 catalog와 최소 작업 단위
+- [~] 기존 planning 예시 단가 version; 실제 승인 단가는 미제공
+- [~] 결정적 예산 risk screening; 수학적 최적화는 미구현
+- [~] 전후 점수 planning estimate; 실제 효과 예측/열화율은 미보정
 - [ ] `RoadInventory-MMS` API
 - [ ] object storage URI 계약
 
@@ -195,7 +197,7 @@ GPU 환경은 모두 `unknown`이다. 합성 확률맵은 계약 검증에만 �
 로컬 정적·Python 검증 기준:
 
 ```text
-road-condition tests: 6 passed
+road-condition tests: 46 passed
 Python compileall: passed
 JavaScript node --check: passed
 Compose YAML parsing: passed

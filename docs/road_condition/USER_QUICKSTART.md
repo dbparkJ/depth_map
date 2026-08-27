@@ -528,3 +528,28 @@ POST /api/v1/jobs/{job_id}/reviews/{defect_id}
 동시에 열린 화면의 stale version은 409로 거부된다. 웹은 최신 version을 표시하고 심각도 수정도
 같은 endpoint에 기록한다. `defects.json`은 절대 덮어쓰지 않는다. 현재 로그인/권한이 없으므로
 actor 문자열은 신원이 검증된 계정이 아니라 audit label이다.
+
+## 20. Stage 11 유지보수 예산 screening v2
+
+웹의 **유지보수 시나리오 v2**에 가용 예산을 입력하면 알려진 예시 단가만으로 우선순위
+screening을 실행한다. API 직접 호출 예시는 다음과 같다.
+
+```json
+POST /api/v1/jobs/{job_id}/scenarios/v2
+{
+  "catalog_id": "internal-planning-v1",
+  "include_types": ["pothole", "rutting", "bump"],
+  "budget_krw": 5000000,
+  "comparison_budgets_krw": [2500000, 7500000],
+  "goal": "risk_screening_priority"
+}
+```
+
+응답의 `priced_total_krw`는 패칭/덧씌우기/연삭과 동원비만 포함한다.
+`full_total_krw`는 차선 통제·장비 이동·폐기물 비용이 미제공이라 `null`이며, 0원이라는 뜻이
+아니다. 카탈로그 단가와 최소 작업 단위는 내부 실험 예시이므로 계약·발주 전에 승인된 실제
+단가표로 별도 catalog를 만들어야 한다.
+
+`score_projection`은 비보정 planning estimate이고 실제 예측이 아니다. 반복 조사 자료가 없는
+현재 `deterioration.annual_rate`와 `projected_score`는 `null`이다. 기존 강우 screening이 필요한
+호환 클라이언트는 legacy `POST /api/v1/jobs/{job_id}/scenarios`를 계속 사용할 수 있다.

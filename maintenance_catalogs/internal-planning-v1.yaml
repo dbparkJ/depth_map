@@ -1,0 +1,53 @@
+catalog_id: internal-planning-v1
+version: 1.0.0
+source_document: null
+effective_date: null
+approval_status: experimental
+currency: KRW
+price_basis: inherited_mvp_planning_example_not_supplier_quote
+goal: risk_screening_priority
+methods:
+  pothole_patch:
+    applies_to: pothole
+    label: Pothole patch planning example
+    quantity_unit: m2
+    minimum_quantity: 0.25
+    minimum_quantity_status: experimental_default
+    area_krw_per_unit: 85000
+    secondary_volume_krw_per_m3: 420000
+    pricing_rule: max_area_or_volume
+  rut_overlay:
+    applies_to: rutting
+    label: Rut overlay planning example
+    quantity_unit: m2
+    minimum_quantity: 1.0
+    minimum_quantity_status: experimental_default
+    area_krw_per_unit: 52000
+    secondary_volume_krw_per_m3: null
+    pricing_rule: area
+  bump_grinding:
+    applies_to: bump
+    label: Bump grinding planning example
+    quantity_unit: m2
+    minimum_quantity: 0.25
+    minimum_quantity_status: experimental_default
+    area_krw_per_unit: 38000
+    secondary_volume_krw_per_m3: null
+    pricing_rule: area
+mobilization:
+  krw_per_scenario: 500000
+  status: inherited_mvp_planning_example
+unpriced_components:
+  traffic_control: null
+  equipment_relocation: null
+  waste_disposal: null
+recommendation_rules:
+  version: risk-screening-v1
+  status: experimental
+  supported_defect_types:
+    - pothole
+    - rutting
+    - bump
+deterioration:
+  annual_rate: null
+  status: N/A_no_repeated_survey

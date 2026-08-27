@@ -40,6 +40,27 @@ class ScenarioRequest(BaseModel):
     rainfall_mm: float = Field(default=30.0, ge=0.0, le=1000.0)
 
 
+class ScenarioV2Request(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    catalog_id: str = Field(
+        default="internal-planning-v1",
+        pattern=r"^[a-z0-9][a-z0-9._-]{0,63}$",
+    )
+    include_types: list[Literal["pothole", "rutting", "bump"]] = Field(
+        default_factory=lambda: ["pothole", "rutting", "bump"]
+    )
+    budget_krw: float | None = Field(default=None, ge=0.0)
+    comparison_budgets_krw: list[float] = Field(default_factory=list, max_length=10)
+    goal: Literal["risk_screening_priority"] = "risk_screening_priority"
+
+    @model_validator(mode="after")
+    def validate_comparison_budgets(self) -> "ScenarioV2Request":
+        if any(value < 0 for value in self.comparison_budgets_krw):
+            raise ValueError("comparison budgets must be non-negative")
+        return self
+
+
 class ReviewRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 

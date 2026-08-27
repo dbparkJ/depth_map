@@ -19,6 +19,10 @@ from road_condition_core.maintenance import (
     DEFAULT_UNIT_PRICES,
     calculate_maintenance_scenario,
 )
+from road_condition_core.maintenance_v2 import (
+    calculate_maintenance_scenario_v2,
+    load_maintenance_catalog,
+)
 from road_condition_core.pipeline import (
     ALGORITHM_VERSION,
     analyze_points,
@@ -28,7 +32,7 @@ from road_condition_core.roi import load_road_roi, resolve_roi_path
 from road_condition_core.scoring import load_scoring_profile, merge_profile_config
 from road_condition_core.synthetic import generate_synthetic_scene
 
-from .schemas import CreateJobRequest, ReviewRequest, ScenarioRequest
+from .schemas import CreateJobRequest, ReviewRequest, ScenarioRequest, ScenarioV2Request
 from .route_view import read_route_manifest, read_route_tile_artifact
 from .store import JobStore
 
@@ -40,6 +44,7 @@ class Settings:
     max_workers: int = 1
     cors_origins: tuple[str, ...] = ("http://localhost:8080", "http://127.0.0.1:8080")
     scoring_profiles_root: Path = Path("scoring_profiles")
+    maintenance_catalogs_root: Path = Path("maintenance_catalogs")
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -58,6 +63,9 @@ class Settings:
             cors_origins=origins,
             scoring_profiles_root=Path(
                 os.getenv("ROAD_CONDITION_SCORING_PROFILES_ROOT", "scoring_profiles")
+            ),
+            maintenance_catalogs_root=Path(
+                os.getenv("ROAD_CONDITION_MAINTENANCE_CATALOGS_ROOT", "maintenance_catalogs")
             ),
         )
 
@@ -228,6 +236,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         resolved_settings.scoring_profiles_root,
         "internal-geometry-mvp-v1",
     )
+    default_maintenance_catalog = load_maintenance_catalog(
+        resolved_settings.maintenance_catalogs_root,
+        "internal-planning-v1",
+    )
     store = JobStore(resolved_settings.data_root)
     executor = ThreadPoolExecutor(
         max_workers=resolved_settings.max_workers,
@@ -344,6 +356,17 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 "optimistic_versioning": True,
                 "authentication": "not_implemented_actor_is_audit_label_only",
             },
+            "maintenance_scenario_v2": {
+                "default_catalog": default_maintenance_catalog.contract(),
+                "goal": "risk_screening_priority",
+                "budget_method": "deterministic_greedy_screening_not_optimization",
+                "score_projection": "uncalibrated_planning_estimate_not_prediction",
+                "deterioration_rate": "N/A_no_repeated_survey",
+                "full_cost": "N/A_unpriced_components_present",
+                "unpriced_components": sorted(
+                    default_maintenance_catalog.unpriced_components
+                ),
+            },
             "report_v2": {
                 "profile": "internal_korean_geometry_evidence_v2",
                 "source_of_truth": "html",
@@ -387,6 +410,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 "rgb_crack_contract_and_holdout_gate",
                 "versioned_scoring_profile",
                 "manual_review_audit_bundle",
+                "versioned_maintenance_catalog_and_budget_screening",
             ],
             "planned_outputs": [
                 "rgb_cracks",
@@ -620,6 +644,32 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 include_types=set(payload.include_types),
                 rainfall_mm=payload.rainfall_mm,
             )
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    @app.post("/api/v1/jobs/{job_id}/scenarios/v2")
+    def scenario_v2(
+        job_id: str,
+        payload: ScenarioV2Request,
+        request: Request,
+    ) -> dict[str, Any]:
+        summary = result_json(job_id, "summary.json", request)
+        defects = result_json(job_id, "defects.json", request)
+        try:
+            catalog = load_maintenance_catalog(
+                request.app.state.settings.maintenance_catalogs_root,
+                payload.catalog_id,
+            )
+            return calculate_maintenance_scenario_v2(
+                summary,
+                defects,
+                catalog=catalog,
+                include_types=set(payload.include_types),
+                budget_krw=payload.budget_krw,
+                comparison_budgets_krw=payload.comparison_budgets_krw,
+            )
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=404, detail="maintenance catalog not found") from exc
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
 

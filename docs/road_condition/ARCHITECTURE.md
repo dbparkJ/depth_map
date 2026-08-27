@@ -40,7 +40,7 @@ Docker Compose 한 번으로 웹 시뮬레이터와 백엔드를 실행할 수 �
 - 분석 알고리즘을 포함하지 않는다.
 - `/api/*`를 `road-condition-api`로 reverse proxy한다.
 - 로컬 도로 좌표 `(s,t)` 기반 residual heatmap과 결함 polygon을 렌더링한다.
-- 유지보수 단가와 강우 screening 값을 API에 전송한다.
+- v2 가용 예산을 API에 전송하며 legacy 단가·강우 screening 계약도 보존한다.
 
 ### `road-condition-api`
 
@@ -68,7 +68,8 @@ road_condition_core/
   geometry.py        ENU→(s,t), surface grid, reference surface
   detectors.py       pothole/rutting/bump 검출
   pipeline.py        전체 분석, 점수, 산출물 기록
-  maintenance.py     보수 수량·단가·강우 screening
+  maintenance.py     legacy 보수 수량·단가·강우 screening
+  maintenance_v2.py  versioned 공법 catalog·예산 우선순위·planning estimate
   report.py          HTML 리포트
   synthetic.py       Docker 데모 및 회귀 fixture
 
@@ -541,3 +542,23 @@ POST /api/v1/jobs/{job_id}/reviews/{defect_id}
 UTC time, reason, profile, 이전/새 version을 보존한다. raw prediction hash가 달라지면 검수를
 중단하고 stale version은 HTTP 409로 거부한다. 현재 인증은 없으므로 actor는 신원 보장이 없는
 audit label이며, route tile 검수와 관리자 2단계 승인은 후속 범위다.
+
+## 19. Stage 11 유지보수·열화 시나리오 v2
+
+기존 `/scenarios` 응답과 기본 단가는 호환성을 위해 그대로 유지한다. v2는 별도
+`/scenarios/v2` endpoint와 `maintenance_catalogs/<catalog_id>.yaml`을 사용한다. 기본
+`internal-planning-v1@1.0.0`은 기존 MVP 단가를 버전만 부여해 이관한 내부 planning 예시이며,
+실제 견적이나 승인 단가표가 아니다. source document와 effective date가 없고 승인 상태는
+`experimental`이다.
+
+공법 추천은 포트홀 패칭, 러팅 덧씌우기, 범프 연삭만 지원한다. 포트홀 0.25㎡, 러팅 1.0㎡,
+범프 0.25㎡의 최소 작업량은 실측/계약 근거가 없는 experimental 기본값이다. 동원비는 알려진
+비용에 한 번만 더한다. 차선 통제, 장비 이동, 폐기물 비용은 입력되지 않았으므로 `null`/`N/A`로
+남기며 `full_total_krw`도 `null`이다. 따라서 `priced_total_krw`는 전체 사업비가 아니라 알려진
+비용의 부분 합계다.
+
+예산 제한 처리는 severity와 형상 metric으로 만든 내부 risk proxy를 정렬하는 결정적 greedy
+screening이다. 수학적 최적화나 안전 위험 모델로 주장하지 않는다. 전후 내부 형상 점수는 선정된
+후보 비율에 따른 `uncalibrated_planning_estimate_not_prediction`이며 실제 보수 효과 예측이
+아니다. 공간 정합된 반복 조사 자료가 없어 연간 열화율과 열화 후 점수는 모두
+`N/A_no_repeated_survey`다.

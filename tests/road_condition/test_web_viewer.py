@@ -29,6 +29,7 @@ def test_web_viewer_has_progressive_route_and_accessibility_contract() -> None:
         "reviewAction",
         "reviewReason",
         "submitReview",
+        "maintenanceBudget",
     ):
         assert f'id="{element_id}"' in html
     assert 'tabindex="0"' in html
@@ -40,6 +41,8 @@ def test_web_viewer_has_progressive_route_and_accessibility_contract() -> None:
     assert "/reviews/" in script
     assert "expected_version" in script
     assert "raw prediction 보존" in script
+    assert "/scenarios/v2" in script
+    assert "전체 비용 N/A" in script
     assert "COPY services/road_condition_web/viewer_core.js" in dockerfile
 
 

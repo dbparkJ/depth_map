@@ -108,11 +108,10 @@
       </section>
 
       <section class="panel">
-        <h2>유지보수 시나리오</h2>
-        <label>포트홀 패칭 단가(원/㎡)<input id="patchPrice" type="number" min="0" step="1000" value="85000"></label>
-        <label>러팅 덧씌우기 단가(원/㎡)<input id="rutPrice" type="number" min="0" step="1000" value="52000"></label>
-        <label>강우 시나리오(mm)<input id="rainfall" type="number" min="0" max="1000" step="5" value="30"></label>
-        <button id="scenarioButton" class="button secondary full" disabled>시나리오 계산</button>
+        <h2>유지보수 시나리오 v2</h2>
+        <label>가용 예산(원)<input id="maintenanceBudget" type="number" min="0" step="100000" value="5000000"></label>
+        <p class="help">실제 단가표가 아닌 내부 planning 예시입니다. 차선 통제·장비 이동·폐기 비용은 N/A입니다.</p>
+        <button id="scenarioButton" class="button secondary full" disabled>예산 screening</button>
         <div id="scenarioResult" class="scenario-result muted">분석 완료 후 계산할 수 있습니다.</div>
       </section>
 

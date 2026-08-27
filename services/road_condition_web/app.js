@@ -751,18 +751,18 @@
   async function calculateScenario() {
     if (!state.jobId) return;
     try {
-      const result = await api(`/api/v1/jobs/${state.jobId}/scenarios`, {
+      const budget = number($("maintenanceBudget").value, 5000000);
+      const result = await api(`/api/v1/jobs/${state.jobId}/scenarios/v2`, {
         method: "POST",
         body: JSON.stringify({
           include_types: ["pothole", "rutting", "bump"],
-          rainfall_mm: number($("rainfall").value, 30),
-          unit_prices: {
-            pothole_patch_krw_per_m2: number($("patchPrice").value, 85000),
-            rut_overlay_krw_per_m2: number($("rutPrice").value, 52000)
-          }
+          budget_krw: budget,
+          comparison_budgets_krw: [Math.round(budget * 0.5), Math.round(budget * 1.5)],
+          goal: "risk_screening_priority"
         })
       });
-      $("scenarioResult").innerHTML = `<span>예상 총비용</span><strong>${number(result.costs_krw.total).toLocaleString("ko-KR")}원</strong><p>현재 ${format(result.score_projection.current_geometry_score, 1)}점 → 보수 후 추정 ${format(result.score_projection.expected_post_maintenance_score, 1)}점</p><p class="muted">포트홀 ${format(result.quantities.pothole_area_m2, 2)}㎡ · 러팅 ${format(result.quantities.rut_overlay_area_m2, 2)}㎡ · 저류 프록시 ${format(result.rainfall_screening.detected_depression_storage_proxy_m3, 3)}㎥</p>`;
+      const screening = result.budget_screening;
+      $("scenarioResult").innerHTML = `<span>알려진 비용 합계</span><strong>${number(screening.priced_total_krw).toLocaleString("ko-KR")}원</strong><p>선정 ${screening.selected_count}건 · 보류 ${screening.deferred_count}건</p><p>현재 ${format(result.score_projection.current_internal_geometry_score, 1)}점 → planning estimate ${format(result.score_projection.post_treatment_internal_score_planning_estimate, 1)}점</p><p class="muted">전체 비용 N/A · 열화율 N/A · 결정적 위험 screening이며 최적화/실제 예측이 아닙니다.</p>`;
     } catch (error) {
       $("scenarioResult").textContent = error.message;
     }

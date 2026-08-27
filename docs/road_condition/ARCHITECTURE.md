@@ -597,3 +597,11 @@ source of truth의 임시 경계는 다음과 같다.
 worker, auth/TLS를 부분적으로 추가하지 않는다. 준비도와 미충족 수용 기준은
 `docs/road_condition/OPERATIONS_READINESS.md`에 기록한다. 현재 상태는
 `DEFERRED_GATE_NOT_MET`이며 production-ready가 아니다.
+
+## 22. Stage 14 v1 release gate
+
+v1 readiness는 `release_readiness/road-condition-v1.yaml`에서 dataset, 최종 metric,
+릴리스 금지 조건, 산출물 SHA와 승인을 함께 검사한다. 값 또는 evidence를 추정하지 않으며
+`road_condition_release_gate.py`는 현재 42개 blocker와 exit code 2를 반환한다. 합성 회귀와
+로컬 Docker smoke는 holdout/실노선/전체 데이터 성능을 대신하지 않는다. 따라서 v1 tag,
+release manifest, SBOM은 생성하지 않았고 현재 상태는 `BLOCKED`다.

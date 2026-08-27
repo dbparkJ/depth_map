@@ -1,0 +1,54 @@
+format_version: 1
+target_release: road-condition-v1
+evaluation_date: "2026-08-27"
+release_status: blocked
+dataset_policy:
+  parameter_tuning_and_final_evaluation_separated: null
+  subsets:
+    calibration: {dataset_id: null, evidence_uri: null}
+    development: {dataset_id: null, evidence_uri: null}
+    holdout: {dataset_id: null, evidence_uri: null}
+    adverse_weather_shadow: {dataset_id: null, evidence_uri: null}
+    flat_negative: {dataset_id: null, evidence_uri: null}
+    severe_pothole: {dataset_id: null, evidence_uri: null}
+    rutting: {dataset_id: null, evidence_uri: null}
+    intersection: {dataset_id: null, evidence_uri: null}
+    stationary_pose_poor: {dataset_id: null, evidence_uri: null}
+metrics:
+  pothole_instance_precision: {value: null, unit: ratio, acceptance_status: null, evidence_uri: null}
+  pothole_instance_recall: {value: null, unit: ratio, acceptance_status: null, evidence_uri: null}
+  max_depth_mae_m: {value: null, unit: m, acceptance_status: null, evidence_uri: null}
+  area_error_m2: {value: null, unit: m2, acceptance_status: null, evidence_uri: null}
+  volume_error_m3: {value: null, unit: m3, acceptance_status: null, evidence_uri: null}
+  rut_depth_mae_m: {value: null, unit: m, acceptance_status: null, evidence_uri: null}
+  flat_false_positive_per_100m: {value: null, unit: count_per_100m, acceptance_status: null, evidence_uri: null}
+  crack_holdout_metrics: {value: null, unit: approved_metric_bundle, acceptance_status: null, evidence_uri: null}
+  valid_coverage_ratio: {value: null, unit: ratio, acceptance_status: null, evidence_uri: null}
+  low_confidence_recall: {value: null, unit: ratio, acceptance_status: null, evidence_uri: null}
+  job_success_rate: {value: null, unit: ratio, acceptance_status: null, evidence_uri: null}
+  wall_time_s: {value: null, unit: s, acceptance_status: null, evidence_uri: null}
+  peak_rss_mb: {value: null, unit: MB, acceptance_status: null, evidence_uri: null}
+  web_first_meaningful_render_s: {value: null, unit: s, acceptance_status: null, evidence_uri: null}
+  report_consistency: {value: null, unit: pass_fail, acceptance_status: null, evidence_uri: null}
+release_prohibitions:
+  holdout_not_synthetic_only: {status: blocked, evidence_uri: null}
+  official_naming_restrictions: {status: pass, evidence_uri: docs/road_condition/ARCHITECTURE.md}
+  full_dataset_no_oom: {status: unknown, evidence_uri: null}
+  report_json_consistency: {status: synthetic_only, evidence_uri: null}
+  boundary_defect_deduplication: {status: synthetic_only, evidence_uri: null}
+  calibration_known_before_auto_confirmation: {status: blocked, evidence_uri: null}
+  docker_quickstart: {status: local_synthetic_only, evidence_uri: null}
+release_artifacts:
+  changelog: {available: false, path: null, sha256: null}
+  release_manifest: {available: false, path: null, sha256: null}
+  docker_image_tags: {available: false, path: null, sha256: null}
+  sbom: {available: false, path: null, sha256: null}
+  migration_notes: {available: false, path: null, sha256: null}
+  benchmark_report: {available: false, path: null, sha256: null}
+  known_limitations: {available: true, path: docs/road_condition/IMPLEMENTATION_STATUS.md, sha256: null}
+  operator_runbook: {available: false, path: null, sha256: null}
+  rollback_runbook: {available: false, path: null, sha256: null}
+approval:
+  status: not_requested
+  approver: null
+  approved_at: null

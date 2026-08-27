@@ -586,3 +586,16 @@ Idempotency-Key: rimms-2026-001-attempt-1
 `GET /api/v1/integrations/rimms/jobs/{external_job_id}`로 polling한다. 현재 정상 응답은
 `awaiting_connector_configuration`이며 completed 결과를 만들지 않는다. callback URL, signed
 query URI, 파일 본문 업로드는 거부된다.
+
+## 22. Stage 14 릴리스 readiness 확인
+
+현재 checkout은 v1 릴리스가 아니다. 다음 gate가 exit code 2를 반환하는 것이 정상이다.
+
+```bash
+PYTHONPATH=. .venv/bin/python scripts/road_condition_release_gate.py \
+  release_readiness/road-condition-v1.yaml
+```
+
+`release_allowed=false`인 동안 image에 v1 tag를 붙이거나 운영 배포하지 않는다. blocker는
+dataset/metric/evidence/release artifact 단위로 출력되며 상세 해제 절차는
+`docs/road_condition/RELEASE_READINESS.md`를 따른다.

@@ -196,12 +196,19 @@ GPU 환경은 모두 `unknown`이다. 합성 확률맵은 계약 검증에만 �
 - [ ] load test
 - [ ] release benchmark
 
+### P4: v1 릴리스 gate
+
+- [x] versioned readiness YAML과 fail-closed machine-readable gate
+- [x] dataset/metric/prohibition/artifact/approval 누락 blocker
+- [~] synthetic regression/Docker smoke만 통과; real holdout/전체 노선 benchmark 전
+- [ ] v1 release 승인, tag, manifest, SBOM, runbook
+
 ## 4. 현재 테스트 결과
 
 로컬 정적·Python 검증 기준:
 
 ```text
-road-condition tests: 50 passed
+road-condition tests: 53 passed
 Python compileall: passed
 JavaScript node --check: passed
 Compose YAML parsing: passed

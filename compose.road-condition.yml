@@ -1,0 +1,47 @@
+name: depth-map-road-condition
+
+services:
+  road-condition-api:
+    build:
+      context: .
+      dockerfile: services/road_condition_api/Dockerfile
+    environment:
+      ROAD_CONDITION_DATA_ROOT: /data
+      ROAD_CONDITION_WORKSPACE_ROOT: /workspace
+      ROAD_CONDITION_MAX_WORKERS: ${ROAD_CONDITION_MAX_WORKERS:-1}
+      ROAD_CONDITION_CORS_ORIGINS: ${ROAD_CONDITION_CORS_ORIGINS:-http://localhost:8080,http://127.0.0.1:8080}
+    volumes:
+      - road-condition-data:/data
+      - ${ROAD_CONDITION_WORKSPACE:-./artifacts}:/workspace:ro
+    ports:
+      - "${ROAD_CONDITION_API_PORT:-8081}:8000"
+    restart: unless-stopped
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import json,urllib.request; assert json.load(urllib.request.urlopen('http://127.0.0.1:8000/api/v1/health', timeout=3))['status'] == 'ok'"
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+
+  road-condition-web:
+    build:
+      context: .
+      dockerfile: services/road_condition_web/Dockerfile
+    depends_on:
+      road-condition-api:
+        condition: service_healthy
+    ports:
+      - "${ROAD_CONDITION_WEB_PORT:-8080}:80"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1/"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+
+volumes:
+  road-condition-data:

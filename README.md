@@ -46,6 +46,15 @@ VWORLD_DOMAIN=http://127.0.0.1:8000
 
 `.env`와 실제 데이터 및 PLY/BIN 같은 대용량 산출물은 Git에 추가하지 않습니다.
 
+## 저장소 구조
+
+- `run_temporal_chunks.sh`: 새 데이터 전체를 60초 temporal 청크로 순차 처리하는 실행 파일
+- `rgbd_map/`: 매핑·후처리·LAS 변환 구현
+- `tests/`: 단위 및 회귀 테스트
+- `viewer/`: 브라우저 점군 뷰어
+- `docs/`: 구현 보고서와 후속 계획
+- 루트의 `map_rgbd_gps.py`, `postprocess_cloud.py`, `convert_cloud_to_las.py`: 개별 작업 진입점
+
 ## 점군 밀도 프리셋
 
 기본 프리셋은 일반 지도 확인용 `balanced`입니다. 프리셋은 프레임·픽셀 샘플링,
@@ -199,11 +208,10 @@ conda run --no-capture-output -n depth-map-postprocess \
 이 명령으로 검증한 chunk 0은 raw 20,000,000점, clean 18,429,603점이며 도로 하부
 후보 581,659점을 모두 제거했다. 노선 199개 구간은 전부 유지됐지만 XY occupied-cell
 coverage는 81.03%라 90% 품질 guard는 아직 통과하지 못했다. 실제 수치와 다음 조정 계획은
-`DEPTH_MAP_5MIN_CHUNK_DEBUG_REPORT.md`에 기록했다.
+`docs/DEPTH_MAP_5MIN_CHUNK_DEBUG_REPORT.md`에 기록했다.
 
-다음 구간은 output과 `--chunk-index`를 함께 `0001`/`1`로 바꿔 별도 호출합니다. 한 번에
-전체 인덱스를 도는 자동 루프는 제공하지 않습니다. 먼저 현재 청크의
-`data/debug_stages/index.json`과 진단 이미지를 승인한 뒤 다음 청크를 실행하십시오.
+5분 청크를 수동 실행할 때 다음 구간은 output과 `--chunk-index`를 함께 `0001`/`1`로
+바꿉니다. 60초 전체 자동 실행은 아래 루트 스크립트를 사용합니다.
 `--chunk-duration-seconds`는 `--start-frame` 또는 `--max-frames`와 함께 사용할 수 없습니다.
 
 GPS 정차 중 동일 위치의 점을 계속 누적하지 않으려면 아래 세 옵션을 함께 사용합니다.
@@ -224,51 +232,23 @@ cloud frame을 균등하게 최대 지정 개수만 남깁니다. 정차 중 제
 
 ### 전체 데이터를 60초 temporal 청크로 처리
 
-`2026-08-19_10-16-33_raw`은 동기화 RGB-D 13,283프레임, timestamp span 1,208.353초이므로
-60초 반개구간 청크가 총 21개(`chunk-index` 0–20)입니다. 아래 루프는 메모리 사용이
-겹치지 않도록 한 번에 한 청크만 순차 실행하며, 중간 청크가 실패하면 즉시 중단합니다.
+저장소 루트의 실행 파일에 새 데이터셋 경로만 전달합니다. 스크립트가 `timestamps.csv`의
+동기화 RGB-D 행으로 유효한 60초 청크를 자동 계산하므로 청크 개수를 직접 지정하지 않습니다.
+메모리 사용이 겹치지 않도록 한 번에 한 청크만 실행하며, 실패하면 즉시 중단합니다.
 
 ```bash
-set -euo pipefail
-
-DATASET_PATH=/home/geon_lab/AI_PARK/2026_camera_lidar_calibration/safe_gard_test/data/2026-08-19_10-16-33_raw
-
-for CHUNK_INDEX in $(seq 0 20); do
-  CHUNK_TAG=$(printf '%04d' "${CHUNK_INDEX}")
-
-  conda run --no-capture-output -n depth-map-postprocess \
-    python map_rgbd_gps.py \
-    "${DATASET_PATH}" \
-    --output "artifacts/ultra_density_map_60sec_chunk_${CHUNK_TAG}_temporal_v1" \
-    --pose-mode hybrid \
-    --cloud-preset dense \
-    --cloud-frame-stride 1 \
-    --pixel-stride 1 \
-    --voxel-size-m 0.03 \
-    --per-frame-max-points 0 \
-    --max-points 40000000 \
-    --browser-max-points 1000000 \
-    --min-depth-m 0.7 \
-    --stationary-speed-threshold-m-s 0.30 \
-    --stationary-min-duration-s 2.0 \
-    --stationary-max-cloud-frames 5 \
-    --chunk-duration-seconds 60 \
-    --chunk-index "${CHUNK_INDEX}" \
-    --postprocess-preset road-map-temporal \
-    --neighbor-backend scipy \
-    --ground-backend local \
-    --write-debug-stages \
-    --debug-stage-max-points 500000 \
-    --no-auto-postprocess-fallback
-done
+./run_temporal_chunks.sh --path /새로운데이터경로/
 ```
 
-각 디렉터리에는 해당 구간의 `data/cloud_clean_enu.ply`가 별도로 생성됩니다. 모든 청크는
-데이터셋 첫 프레임의 공통 ENU 원점을 사용하지만, 위 명령은 청크 PLY를 마지막에 하나로
-병합하지 않습니다. 정차 제한을 추가하기 전 검증한 첫 60초 청크 하나는 1시간 3분 18초,
-peak RSS 17.43 GiB가 걸렸으므로 21개 전체 순차 실행은 장시간 작업입니다. 정차 제한을
-적용한 새 실행시간은 별도로 측정해야 합니다. 마지막 `chunk-index 20`은 약 8.35초
-구간이라 앞선 청크보다 짧습니다.
+결과는 `artifacts/<데이터셋명>/temporal_60sec/chunk_XXXX/`에 구간별로 생성됩니다.
+`data/summary.json`이 이미 있는 완료 청크는 자동으로 건너뛰므로 같은 명령으로 이어서
+실행할 수 있습니다. 모든 청크는 데이터셋 첫 프레임의 공통 ENU 원점을 사용하지만 청크
+PLY를 마지막에 하나로 병합하지는 않습니다. 프레임이 0개이거나 1개뿐인 청크는 경고 후
+건너뜁니다.
+
+기존 `2026-08-19_10-16-33_raw`은 21개 청크이며, 정차 제한을 추가하기 전 첫 60초 청크는
+1시간 3분 18초와 peak RSS 17.43 GiB를 기록했습니다. 새 데이터의 전체 실행시간은 길이,
+정차 비율과 depth 분포에 따라 달라집니다.
 
 일반적인 주행 구간은 다음처럼 생성합니다.
 
@@ -479,7 +459,7 @@ GPS 방위각, Essential 스케일과 실패 폴백을 사용합니다. 실제 �
 IMU를 빼면 급격한 회전·정지·텍스처 부족 구간에서 자세가 약해질 수 있습니다.
 카메라–GNSS 외부표정과 레버암을 측정해 위 옵션에 넣는 것이 절대 정합 개선의 중요한
 선행 작업입니다. 이번 밀도 작업에서 제외한 기능의 단계별 계획은
-[`DEPTH_MAP_FOLLOW_UP_PLAN.md`](DEPTH_MAP_FOLLOW_UP_PLAN.md)에 정리했습니다.
+[`DEPTH_MAP_FOLLOW_UP_PLAN.md`](docs/DEPTH_MAP_FOLLOW_UP_PLAN.md)에 정리했습니다.
 
 ## 테스트
 

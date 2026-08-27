@@ -1,11 +1,19 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from collections import OrderedDict
+from typing import Any
 
 import cv2
 import numpy as np
 
 from .dataset import CameraModel, FrameRecord
+from .depth_consistency import (
+    TemporalDepthState,
+    classify_projective_depth,
+)
+from .depth_quality import DepthQualityPolicy, evaluate_depth_quality
+from .frame_quality import FrameAuditResult
 from .trajectory import TrajectoryResult
 
 
@@ -27,6 +35,15 @@ class PointCloudBuildStats:
     depth_edge_retained_count: int = 0
     confidence_map_available: bool = False
     confidence_filter_applied: bool = False
+    depth_quality_rejected_count: int = 0
+    far_depth_rejected_count: int = 0
+    temporal_test_count: int = 0
+    temporal_support_count: int = 0
+    temporal_contradiction_count: int = 0
+    temporal_rejected_count: int = 0
+    coarse_support_rejected_count: int = 0
+    points_before_quality_prefilter: int = 0
+    points_after_quality_prefilter: int = 0
 
 
 @dataclass(frozen=True)
@@ -45,6 +62,23 @@ class PointCloudResult:
     depth_max_m: np.ndarray | None = None
     depth_edge_pass_count: np.ndarray | None = None
     source_voxel_key: np.ndarray | None = None
+    support_observation_count: np.ndarray | None = None
+    support_distinct_frame_count: np.ndarray | None = None
+    independent_view_count: np.ndarray | None = None
+    support_time_span_s: np.ndarray | None = None
+    support_path_span_m: np.ndarray | None = None
+    support_position_std_m: np.ndarray | None = None
+    support_depth_std_m: np.ndarray | None = None
+    temporal_test_count: np.ndarray | None = None
+    temporal_support_count: np.ndarray | None = None
+    temporal_contradiction_count: np.ndarray | None = None
+    far_depth_risk_count: np.ndarray | None = None
+    source_frame_id: np.ndarray | None = None
+    mean_source_time_s: np.ndarray | None = None
+    pose_quality_score: np.ndarray | None = None
+    frame_reports: tuple[dict[str, Any], ...] = ()
+    prefilter_removed_points_enu_m: np.ndarray | None = None
+    prefilter_removed_colors_rgb: np.ndarray | None = None
 
 
 @dataclass(frozen=True)
@@ -61,6 +95,14 @@ class _VoxelRun:
     depth_min: np.ndarray
     depth_max: np.ndarray
     edge_pass_counts: np.ndarray
+    temporal_test_sums: np.ndarray
+    temporal_support_sums: np.ndarray
+    temporal_contradiction_sums: np.ndarray
+    far_risk_counts: np.ndarray
+    frame_id_min: np.ndarray
+    frame_id_max: np.ndarray
+    source_time_sums: np.ndarray
+    pose_quality_sums: np.ndarray
 
 
 def _positive_int(name: str, value: int) -> int:
@@ -79,6 +121,15 @@ def _optional_positive_float(name: str, value: float | None) -> float | None:
     if not np.isfinite(result) or result <= 0.0:
         raise ValueError(f"{name} must be a finite positive value")
     return result
+
+
+def voxel_position_std_upper_bound(voxel_size_m: float) -> float:
+    """Combined XYZ standard-deviation bound inside one cubic output voxel."""
+
+    size = float(voxel_size_m)
+    if not np.isfinite(size) or size <= 0.0:
+        raise ValueError("voxel_size_m must be a finite positive value")
+    return float(np.sqrt(3.0) * size / 2.0)
 
 
 def depth_edge_keep_mask(
@@ -324,6 +375,14 @@ def _reduce_voxel_entries(
     depth_min: np.ndarray,
     depth_max: np.ndarray,
     edge_pass_counts: np.ndarray,
+    temporal_test_sums: np.ndarray,
+    temporal_support_sums: np.ndarray,
+    temporal_contradiction_sums: np.ndarray,
+    far_risk_counts: np.ndarray,
+    frame_id_min: np.ndarray,
+    frame_id_max: np.ndarray,
+    source_time_sums: np.ndarray,
+    pose_quality_sums: np.ndarray,
     *,
     distinct_per_key: bool = False,
 ) -> _VoxelRun:
@@ -358,6 +417,24 @@ def _reduce_voxel_entries(
     np.maximum.at(reduced_depth_max, inverse, depth_max)
     reduced_edge_pass_counts = np.zeros(unique_count, dtype=np.int64)
     np.add.at(reduced_edge_pass_counts, inverse, edge_pass_counts)
+    reduced_temporal_test = np.zeros(unique_count, dtype=np.int64)
+    reduced_temporal_support = np.zeros(unique_count, dtype=np.int64)
+    reduced_temporal_contradiction = np.zeros(unique_count, dtype=np.int64)
+    reduced_far_risk = np.zeros(unique_count, dtype=np.int64)
+    np.add.at(reduced_temporal_test, inverse, temporal_test_sums)
+    np.add.at(reduced_temporal_support, inverse, temporal_support_sums)
+    np.add.at(reduced_temporal_contradiction, inverse, temporal_contradiction_sums)
+    np.add.at(reduced_far_risk, inverse, far_risk_counts)
+    reduced_frame_min = np.full(unique_count, np.iinfo(np.int64).max, dtype=np.int64)
+    reduced_frame_max = np.full(unique_count, np.iinfo(np.int64).min, dtype=np.int64)
+    np.minimum.at(reduced_frame_min, inverse, frame_id_min)
+    np.maximum.at(reduced_frame_max, inverse, frame_id_max)
+    reduced_source_time = np.bincount(
+        inverse, weights=source_time_sums, minlength=unique_count
+    )
+    reduced_pose_quality = np.bincount(
+        inverse, weights=pose_quality_sums, minlength=unique_count
+    )
     return _VoxelRun(
         keys=unique_keys.astype(np.int64, copy=False),
         xyz_sums=reduced_xyz,
@@ -369,6 +446,14 @@ def _reduce_voxel_entries(
         depth_min=reduced_depth_min,
         depth_max=reduced_depth_max,
         edge_pass_counts=reduced_edge_pass_counts,
+        temporal_test_sums=reduced_temporal_test,
+        temporal_support_sums=reduced_temporal_support,
+        temporal_contradiction_sums=reduced_temporal_contradiction,
+        far_risk_counts=reduced_far_risk,
+        frame_id_min=reduced_frame_min,
+        frame_id_max=reduced_frame_max,
+        source_time_sums=reduced_source_time,
+        pose_quality_sums=reduced_pose_quality,
     )
 
 
@@ -378,6 +463,13 @@ def _local_voxel_run(
     voxel_size_m: float,
     depths_m: np.ndarray | None = None,
     edge_pass: np.ndarray | None = None,
+    temporal_test_count: np.ndarray | None = None,
+    temporal_support_count: np.ndarray | None = None,
+    temporal_contradiction_count: np.ndarray | None = None,
+    far_depth_risk: np.ndarray | None = None,
+    frame_id: int = -1,
+    source_time_s: float = 0.0,
+    pose_quality_score: float = 1.0,
 ) -> _VoxelRun:
     points, colors = _validate_point_color_arrays(points_enu_m, colors_rgb)
     voxel_size = float(voxel_size_m)
@@ -395,6 +487,14 @@ def _local_voxel_run(
             depth_min=np.empty(0, dtype=np.float64),
             depth_max=np.empty(0, dtype=np.float64),
             edge_pass_counts=np.empty(0, dtype=np.int64),
+            temporal_test_sums=np.empty(0, dtype=np.int64),
+            temporal_support_sums=np.empty(0, dtype=np.int64),
+            temporal_contradiction_sums=np.empty(0, dtype=np.int64),
+            far_risk_counts=np.empty(0, dtype=np.int64),
+            frame_id_min=np.empty(0, dtype=np.int64),
+            frame_id_max=np.empty(0, dtype=np.int64),
+            source_time_sums=np.empty(0, dtype=np.float64),
+            pose_quality_sums=np.empty(0, dtype=np.float64),
         )
     if depths_m is None:
         depths = np.zeros(len(points), dtype=np.float64)
@@ -416,6 +516,27 @@ def _local_voxel_run(
     if np.any(scaled < int64_info.min) or np.any(scaled > int64_info.max):
         raise ValueError("voxel coordinates exceed the int64 key range")
     keys = scaled.astype(np.int64)
+    def aligned_counts(value: np.ndarray | None, name: str) -> np.ndarray:
+        if value is None:
+            return np.zeros(len(points), dtype=np.int64)
+        array = np.asarray(value)
+        if array.shape != (len(points),) or not (
+            np.issubdtype(array.dtype, np.number)
+            or np.issubdtype(array.dtype, np.bool_)
+        ):
+            raise ValueError(f"{name} must be numeric with shape (N,)")
+        if np.any(array < 0):
+            raise ValueError(f"{name} must be non-negative")
+        return array.astype(np.int64, copy=False)
+
+    temporal_tests = aligned_counts(temporal_test_count, "temporal_test_count")
+    temporal_support = aligned_counts(
+        temporal_support_count, "temporal_support_count"
+    )
+    temporal_contradictions = aligned_counts(
+        temporal_contradiction_count, "temporal_contradiction_count"
+    )
+    far_risk = aligned_counts(far_depth_risk, "far_depth_risk")
     return _reduce_voxel_entries(
         keys,
         points,
@@ -427,6 +548,14 @@ def _local_voxel_run(
         depths,
         depths,
         edge_pass_counts,
+        temporal_tests,
+        temporal_support,
+        temporal_contradictions,
+        far_risk,
+        np.full(len(points), int(frame_id), dtype=np.int64),
+        np.full(len(points), int(frame_id), dtype=np.int64),
+        np.full(len(points), float(source_time_s), dtype=np.float64),
+        np.full(len(points), float(pose_quality_score), dtype=np.float64),
         distinct_per_key=True,
     )
 
@@ -449,6 +578,17 @@ def _merge_voxel_runs(left: _VoxelRun, right: _VoxelRun) -> _VoxelRun:
         np.concatenate((left.depth_min, right.depth_min), axis=0),
         np.concatenate((left.depth_max, right.depth_max), axis=0),
         np.concatenate((left.edge_pass_counts, right.edge_pass_counts), axis=0),
+        np.concatenate((left.temporal_test_sums, right.temporal_test_sums), axis=0),
+        np.concatenate((left.temporal_support_sums, right.temporal_support_sums), axis=0),
+        np.concatenate(
+            (left.temporal_contradiction_sums, right.temporal_contradiction_sums),
+            axis=0,
+        ),
+        np.concatenate((left.far_risk_counts, right.far_risk_counts), axis=0),
+        np.concatenate((left.frame_id_min, right.frame_id_min), axis=0),
+        np.concatenate((left.frame_id_max, right.frame_id_max), axis=0),
+        np.concatenate((left.source_time_sums, right.source_time_sums), axis=0),
+        np.concatenate((left.pose_quality_sums, right.pose_quality_sums), axis=0),
     )
 
 
@@ -503,6 +643,9 @@ def _metadata_from_run(run: _VoxelRun) -> dict[str, np.ndarray]:
     variance_xyz = np.divide(run.xyz_squared_sums, divisor) - mean_xyz * mean_xyz
     np.maximum(variance_xyz, 0.0, out=variance_xyz)
     position_std = np.sqrt(np.sum(variance_xyz, axis=1))
+    source_frame = np.where(
+        run.frame_id_min == run.frame_id_max, run.frame_id_min, -1
+    ).astype(np.int32)
     return {
         "observation_count": run.counts.astype(np.int64, copy=True),
         "distinct_frame_count": run.distinct_frame_counts.astype(
@@ -514,6 +657,23 @@ def _metadata_from_run(run: _VoxelRun) -> dict[str, np.ndarray]:
         "depth_max_m": run.depth_max.astype(np.float32, copy=True),
         "depth_edge_pass_count": run.edge_pass_counts.astype(np.int64, copy=True),
         "source_voxel_key": run.keys.astype(np.int64, copy=True),
+        "temporal_test_count": np.rint(
+            np.divide(run.temporal_test_sums, run.counts)
+        ).astype(np.uint16),
+        "temporal_support_count": np.rint(
+            np.divide(run.temporal_support_sums, run.counts)
+        ).astype(np.uint16),
+        "temporal_contradiction_count": np.rint(
+            np.divide(run.temporal_contradiction_sums, run.counts)
+        ).astype(np.uint16),
+        "far_depth_risk_count": run.far_risk_counts.astype(np.uint32, copy=True),
+        "source_frame_id": source_frame,
+        "mean_source_time_s": np.divide(
+            run.source_time_sums, run.counts
+        ).astype(np.float64),
+        "pose_quality_score": np.divide(
+            run.pose_quality_sums, run.counts
+        ).astype(np.float32),
     }
 
 
@@ -620,6 +780,248 @@ def spatially_sample_indices(points: np.ndarray, max_points: int) -> np.ndarray:
     if len(selected) != cap:
         raise RuntimeError("spatial sampler failed to produce the requested point cap")
     return selected.astype(np.int64, copy=False)
+
+
+@dataclass(frozen=True)
+class _CoarseSupportRun:
+    keys: np.ndarray
+    observation_counts: np.ndarray
+    frame_counts: np.ndarray
+    centroid_sums: np.ndarray
+    centroid_squared_sums: np.ndarray
+    depth_sums: np.ndarray
+    depth_squared_sums: np.ndarray
+    time_min_s: np.ndarray
+    time_max_s: np.ndarray
+    path_min_m: np.ndarray
+    path_max_m: np.ndarray
+
+
+def _empty_coarse_run() -> _CoarseSupportRun:
+    return _CoarseSupportRun(
+        keys=np.empty((0, 3), dtype=np.int64),
+        observation_counts=np.empty(0, dtype=np.int64),
+        frame_counts=np.empty(0, dtype=np.int64),
+        centroid_sums=np.empty((0, 3), dtype=np.float64),
+        centroid_squared_sums=np.empty((0, 3), dtype=np.float64),
+        depth_sums=np.empty(0, dtype=np.float64),
+        depth_squared_sums=np.empty(0, dtype=np.float64),
+        time_min_s=np.empty(0, dtype=np.float64),
+        time_max_s=np.empty(0, dtype=np.float64),
+        path_min_m=np.empty(0, dtype=np.float64),
+        path_max_m=np.empty(0, dtype=np.float64),
+    )
+
+
+def _reduce_coarse_runs(entries: _CoarseSupportRun) -> _CoarseSupportRun:
+    if len(entries.keys) == 0:
+        return entries
+    keys, inverse = np.unique(entries.keys, axis=0, return_inverse=True)
+    count = len(keys)
+    observation = np.zeros(count, dtype=np.int64)
+    frames = np.zeros(count, dtype=np.int64)
+    np.add.at(observation, inverse, entries.observation_counts)
+    np.add.at(frames, inverse, entries.frame_counts)
+    centroid = np.empty((count, 3), dtype=np.float64)
+    centroid_squared = np.empty((count, 3), dtype=np.float64)
+    for axis in range(3):
+        centroid[:, axis] = np.bincount(
+            inverse, weights=entries.centroid_sums[:, axis], minlength=count
+        )
+        centroid_squared[:, axis] = np.bincount(
+            inverse,
+            weights=entries.centroid_squared_sums[:, axis],
+            minlength=count,
+        )
+    depth = np.bincount(inverse, weights=entries.depth_sums, minlength=count)
+    depth_squared = np.bincount(
+        inverse, weights=entries.depth_squared_sums, minlength=count
+    )
+    time_min = np.full(count, np.inf, dtype=np.float64)
+    time_max = np.full(count, -np.inf, dtype=np.float64)
+    path_min = np.full(count, np.inf, dtype=np.float64)
+    path_max = np.full(count, -np.inf, dtype=np.float64)
+    np.minimum.at(time_min, inverse, entries.time_min_s)
+    np.maximum.at(time_max, inverse, entries.time_max_s)
+    np.minimum.at(path_min, inverse, entries.path_min_m)
+    np.maximum.at(path_max, inverse, entries.path_max_m)
+    return _CoarseSupportRun(
+        keys=keys,
+        observation_counts=observation,
+        frame_counts=frames,
+        centroid_sums=centroid,
+        centroid_squared_sums=centroid_squared,
+        depth_sums=depth,
+        depth_squared_sums=depth_squared,
+        time_min_s=time_min,
+        time_max_s=time_max,
+        path_min_m=path_min,
+        path_max_m=path_max,
+    )
+
+
+def _local_coarse_support_run(
+    points: np.ndarray,
+    depths_m: np.ndarray,
+    voxel_size_m: float,
+    *,
+    time_s: float,
+    path_m: float,
+) -> _CoarseSupportRun:
+    if len(points) == 0:
+        return _empty_coarse_run()
+    keys = np.floor(np.asarray(points, dtype=np.float64) / voxel_size_m).astype(
+        np.int64
+    )
+    unique, inverse = np.unique(keys, axis=0, return_inverse=True)
+    count = len(unique)
+    observations = np.bincount(inverse, minlength=count).astype(np.int64)
+    sums = np.empty((count, 3), dtype=np.float64)
+    for axis in range(3):
+        sums[:, axis] = np.bincount(
+            inverse, weights=points[:, axis], minlength=count
+        )
+    centroids = sums / observations[:, None]
+    depth_sums = np.bincount(inverse, weights=depths_m, minlength=count)
+    depth_means = depth_sums / observations
+    return _CoarseSupportRun(
+        keys=unique,
+        observation_counts=observations,
+        frame_counts=np.ones(count, dtype=np.int64),
+        centroid_sums=centroids,
+        centroid_squared_sums=centroids * centroids,
+        depth_sums=depth_means,
+        depth_squared_sums=depth_means * depth_means,
+        time_min_s=np.full(count, float(time_s), dtype=np.float64),
+        time_max_s=np.full(count, float(time_s), dtype=np.float64),
+        path_min_m=np.full(count, float(path_m), dtype=np.float64),
+        path_max_m=np.full(count, float(path_m), dtype=np.float64),
+    )
+
+
+def _merge_coarse_runs(
+    left: _CoarseSupportRun, right: _CoarseSupportRun
+) -> _CoarseSupportRun:
+    if len(left.keys) == 0:
+        return right
+    if len(right.keys) == 0:
+        return left
+    return _reduce_coarse_runs(
+        _CoarseSupportRun(
+            **{
+                field: np.concatenate((getattr(left, field), getattr(right, field)), axis=0)
+                for field in _CoarseSupportRun.__dataclass_fields__
+            }
+        )
+    )
+
+
+class _CoarseSupportAccumulator:
+    def __init__(self) -> None:
+        self._levels: list[_CoarseSupportRun | None] = []
+
+    def add(self, run: _CoarseSupportRun) -> None:
+        if len(run.keys) == 0:
+            return
+        level = 0
+        while True:
+            if level == len(self._levels):
+                self._levels.append(run)
+                return
+            previous = self._levels[level]
+            if previous is None:
+                self._levels[level] = run
+                return
+            self._levels[level] = None
+            run = _merge_coarse_runs(previous, run)
+            level += 1
+
+    def finish(self) -> _CoarseSupportRun:
+        result: _CoarseSupportRun | None = None
+        for run in reversed(self._levels):
+            if run is not None:
+                result = run if result is None else _merge_coarse_runs(result, run)
+        return _empty_coarse_run() if result is None else result
+
+
+def _structured_keys(keys: np.ndarray) -> np.ndarray:
+    contiguous = np.ascontiguousarray(keys, dtype=np.int64)
+    dtype = np.dtype([("x", np.int64), ("y", np.int64), ("z", np.int64)])
+    return contiguous.view(dtype).reshape(-1)
+
+
+def _map_coarse_support(
+    points: np.ndarray,
+    mean_depth_m: np.ndarray,
+    near_run: _CoarseSupportRun,
+    far_run: _CoarseSupportRun,
+    *,
+    near_voxel_size_m: float,
+    far_voxel_size_m: float,
+    far_start_m: float,
+    min_baseline_m: float,
+    min_time_separation_s: float,
+) -> dict[str, np.ndarray]:
+    count = len(points)
+    result: dict[str, np.ndarray] = {
+        "support_observation_count": np.zeros(count, dtype=np.uint32),
+        "support_distinct_frame_count": np.zeros(count, dtype=np.uint16),
+        "independent_view_count": np.zeros(count, dtype=np.uint16),
+        "support_time_span_s": np.zeros(count, dtype=np.float32),
+        "support_path_span_m": np.zeros(count, dtype=np.float32),
+        "support_position_std_m": np.full(count, np.nan, dtype=np.float32),
+        "support_depth_std_m": np.full(count, np.nan, dtype=np.float32),
+    }
+    far = np.asarray(mean_depth_m) >= far_start_m
+    for selection, run, size in (
+        (~far, near_run, near_voxel_size_m),
+        (far, far_run, far_voxel_size_m),
+    ):
+        target = np.flatnonzero(selection)
+        if len(target) == 0 or len(run.keys) == 0:
+            continue
+        query = np.floor(points[target] / size).astype(np.int64)
+        source_keys = _structured_keys(run.keys)
+        query_keys = _structured_keys(query)
+        locations = np.searchsorted(source_keys, query_keys)
+        within = locations < len(source_keys)
+        matched = np.zeros(len(target), dtype=bool)
+        matched[within] = source_keys[locations[within]] == query_keys[within]
+        output_indices = target[matched]
+        source_indices = locations[matched]
+        frames = run.frame_counts[source_indices]
+        time_span = run.time_max_s[source_indices] - run.time_min_s[source_indices]
+        path_span = run.path_max_m[source_indices] - run.path_min_m[source_indices]
+        baseline_views = 1 + np.floor(path_span / min_baseline_m).astype(np.int64)
+        time_views = 1 + np.floor(
+            time_span / min_time_separation_s
+        ).astype(np.int64)
+        independent = np.minimum(frames, np.maximum(baseline_views, time_views))
+        mean_xyz = run.centroid_sums[source_indices] / frames[:, None]
+        variance_xyz = (
+            run.centroid_squared_sums[source_indices] / frames[:, None]
+            - mean_xyz * mean_xyz
+        )
+        np.maximum(variance_xyz, 0.0, out=variance_xyz)
+        mean_depth = run.depth_sums[source_indices] / frames
+        depth_variance = (
+            run.depth_squared_sums[source_indices] / frames - mean_depth * mean_depth
+        )
+        np.maximum(depth_variance, 0.0, out=depth_variance)
+        result["support_observation_count"][output_indices] = run.observation_counts[
+            source_indices
+        ].astype(np.uint32)
+        result["support_distinct_frame_count"][output_indices] = frames.astype(np.uint16)
+        result["independent_view_count"][output_indices] = independent.astype(np.uint16)
+        result["support_time_span_s"][output_indices] = time_span.astype(np.float32)
+        result["support_path_span_m"][output_indices] = path_span.astype(np.float32)
+        result["support_position_std_m"][output_indices] = np.sqrt(
+            np.sum(variance_xyz, axis=1)
+        ).astype(np.float32)
+        result["support_depth_std_m"][output_indices] = np.sqrt(
+            depth_variance
+        ).astype(np.float32)
+    return result
 
 
 def _validate_build_inputs(
@@ -739,6 +1141,22 @@ def build_point_cloud(
     depth_edge_abs_m: float = 0.18,
     depth_edge_rel_ratio: float = 0.03,
     depth_edge_min_valid_neighbors: int = 4,
+    depth_quality_policy: DepthQualityPolicy | None = None,
+    frame_audit: FrameAuditResult | None = None,
+    support_enabled: bool = False,
+    support_voxel_size_m: float = 0.15,
+    support_far_voxel_size_m: float = 0.25,
+    support_far_start_m: float = 20.0,
+    support_min_independent_frames: int = 2,
+    support_min_baseline_m: float = 0.4,
+    support_min_time_separation_s: float = 0.5,
+    max_support_position_std_m: float = 0.18,
+    temporal_enabled: bool = False,
+    temporal_window_seconds: float = 0.25,
+    temporal_depth_abs_m: float = 0.15,
+    temporal_depth_rel_ratio: float = 0.02,
+    temporal_max_free_space_contradictions: int = 0,
+    prefilter_removed_sample_max_points: int = 200_000,
 ) -> PointCloudResult:
     _validate_build_inputs(
         frames,
@@ -768,6 +1186,36 @@ def build_point_cloud(
         keyframe_angle_deg=keyframe_angle_deg,
         keyframe_max_dt_s=keyframe_max_dt_s,
     )
+    if frame_audit is not None:
+        if frame_audit.use_for_cloud.shape != (len(frames),):
+            raise ValueError("frame audit does not align with frames")
+        selected = [index for index in selected if frame_audit.use_for_cloud[index]]
+        if not selected:
+            raise RuntimeError("frame audit excluded every cloud frame")
+    if depth_quality_policy is None:
+        depth_quality_policy = DepthQualityPolicy(
+            min_depth_m=float(min_depth_m),
+            max_depth_m=float(max_depth_m),
+            edge_enabled=bool(depth_edge_filter),
+            edge_radius_px=int(depth_edge_radius_px),
+            edge_abs_m=float(depth_edge_abs_m),
+            edge_rel_ratio=float(depth_edge_rel_ratio),
+            edge_min_valid_neighbors=int(depth_edge_min_valid_neighbors),
+        )
+    for name, value in (
+        ("support_voxel_size_m", support_voxel_size_m),
+        ("support_far_voxel_size_m", support_far_voxel_size_m),
+        ("support_min_baseline_m", support_min_baseline_m),
+        ("support_min_time_separation_s", support_min_time_separation_s),
+        ("temporal_window_seconds", temporal_window_seconds),
+        ("temporal_depth_abs_m", temporal_depth_abs_m),
+    ):
+        if not np.isfinite(float(value)) or float(value) <= 0.0:
+            raise ValueError(f"{name} must be finite and positive")
+    if int(support_min_independent_frames) < 1:
+        raise ValueError("support_min_independent_frames must be at least 1")
+    if int(temporal_max_free_space_contradictions) < 0:
+        raise ValueError("temporal contradiction allowance must be non-negative")
     min_depth_mm = float(min_depth_m) * 1000.0
     max_depth_mm = float(max_depth_m) * 1000.0
     camera_offset_values = (
@@ -786,6 +1234,70 @@ def build_point_cloud(
     sample_v = yy.reshape(-1)
     candidates_per_frame = len(sample_u)
     accumulator = _VoxelRunAccumulator()
+    near_support_accumulator = _CoarseSupportAccumulator()
+    far_support_accumulator = _CoarseSupportAccumulator()
+    depth_cache: OrderedDict[int, tuple[np.ndarray, object, bool]] = OrderedDict()
+    frame_reports: list[dict[str, Any]] = [
+        {
+            "cloud_selected": int(index in selected),
+            "cloud_decoded": 0,
+            "projection_candidate_count": 0,
+            "depth_base_valid_count": 0,
+            "depth_quality_removed_count": 0,
+            "temporal_removed_count": 0,
+            "fusion_contribution_count": 0,
+        }
+        for index in range(len(frames))
+    ]
+    cloud_positions = (
+        np.asarray(frame_audit.positions_enu_m, dtype=np.float64)
+        if frame_audit is not None
+        else np.asarray(trajectory.positions_enu_m, dtype=np.float64)
+    )
+    cloud_rotations = (
+        np.asarray(frame_audit.rotations_enu_from_camera, dtype=np.float64)
+        if frame_audit is not None
+        else np.asarray(trajectory.rotations_enu_from_camera, dtype=np.float64)
+    )
+    pose_scores = (
+        np.asarray(frame_audit.quality_scores, dtype=np.float64)
+        if frame_audit is not None
+        else np.ones(len(frames), dtype=np.float64)
+    )
+    path_coordinate = np.concatenate(
+        (
+            np.zeros(1, dtype=np.float64),
+            np.cumsum(np.linalg.norm(np.diff(cloud_positions[:, :2], axis=0), axis=1)),
+        )
+    )
+    time_origin_ns = int(frames[0].monotonic_ns)
+
+    def load_depth_quality(frame_index: int):
+        cached = depth_cache.get(frame_index)
+        if cached is not None:
+            depth_cache.move_to_end(frame_index)
+            return cached
+        source = frames[frame_index]
+        depth_image = cv2.imread(str(source.depth_path), cv2.IMREAD_UNCHANGED)
+        if depth_image is None:
+            raise ValueError(f"Failed to decode depth image: {source.depth_path}")
+        confidence_image = None
+        confidence_available = False
+        if source.confidence_path is not None and source.confidence_path.is_file():
+            confidence_image = cv2.imread(
+                str(source.confidence_path), cv2.IMREAD_UNCHANGED
+            )
+            confidence_available = confidence_image is not None
+        quality_result = evaluate_depth_quality(
+            depth_image,
+            depth_quality_policy,
+            confidence_image,
+        )
+        value = (depth_image, quality_result, confidence_available)
+        depth_cache[frame_index] = value
+        while len(depth_cache) > 8:
+            depth_cache.popitem(last=False)
+        return value
     decoded = 0
     candidate_samples = 0
     valid_depth_samples = 0
@@ -793,74 +1305,85 @@ def build_point_cloud(
     depth_edge_rejected = 0
     depth_edge_retained = 0
     confidence_map_available = False
+    confidence_filter_applied = False
+    depth_quality_rejected = 0
+    far_depth_rejected = 0
+    temporal_test_total = 0
+    temporal_support_total = 0
+    temporal_contradiction_total = 0
+    temporal_rejected = 0
     discarded_by_per_frame_cap = 0
     points_before_voxel = 0
 
     for sequence_index, frame_index in enumerate(selected):
         frame = frames[frame_index]
-        depth = cv2.imread(str(frame.depth_path), cv2.IMREAD_UNCHANGED)
+        depth, depth_quality, frame_confidence_available = load_depth_quality(
+            frame_index
+        )
         color_bgr = cv2.imread(str(frame.rgb_path), cv2.IMREAD_COLOR)
-        if depth is None or color_bgr is None:
+        if color_bgr is None:
             continue
         if depth.ndim != 2 or depth.shape != (camera.height, camera.width):
             raise ValueError(f"Unexpected depth size at {frame.depth_path}: {depth.shape}")
         if color_bgr.shape != (camera.height, camera.width, 3):
             raise ValueError(f"Unexpected RGB size at {frame.rgb_path}: {color_bgr.shape}")
         decoded += 1
-        if not confidence_map_available and frame.confidence_path is not None:
-            confidence = None
-            if frame.confidence_path.is_file():
-                try:
-                    confidence = cv2.imread(
-                        str(frame.confidence_path), cv2.IMREAD_UNCHANGED
-                    )
-                except cv2.error:
-                    confidence = None
-            confidence_map_available = (
-                confidence is not None and confidence.shape[:2] == depth.shape
-            )
-        candidate_samples += candidates_per_frame
-        d = depth[sample_v, sample_u].astype(np.float64)
-        depth_range_valid = (
-            np.isfinite(d)
-            & (d != 0.0)
-            & (d != 65535.0)
-            & (d >= min_depth_mm)
-            & (d <= max_depth_mm)
+        frame_reports[frame_index]["cloud_decoded"] = 1
+        confidence_map_available |= bool(frame_confidence_available)
+        confidence_filter_applied |= (
+            depth_quality.report["confidence_status"] == "applied"
         )
+        candidate_samples += candidates_per_frame
+        frame_reports[frame_index]["projection_candidate_count"] = candidates_per_frame
+        d = depth[sample_v, sample_u].astype(np.float64)
+        depth_range_valid = depth_quality.base_valid_mask[sample_v, sample_u]
         frame_valid_count = int(np.count_nonzero(depth_range_valid))
+        frame_reports[frame_index]["depth_base_valid_count"] = frame_valid_count
         valid_depth_samples += frame_valid_count
         invalid_depth_samples += candidates_per_frame - frame_valid_count
-        if bool(depth_edge_filter) and frame_valid_count:
-            full_depth = depth.astype(np.float64, copy=False)
-            full_valid = (
-                np.isfinite(full_depth)
-                & (full_depth != 0.0)
-                & (full_depth != 65535.0)
-                & (full_depth >= min_depth_mm)
-                & (full_depth <= max_depth_mm)
+        valid = depth_quality.valid_mask[sample_v, sample_u]
+        frame_edge_retained = int(np.count_nonzero(valid))
+        local_rejected = int(
+            np.count_nonzero(
+                depth_range_valid
+                & ~depth_quality.local_consistency_mask[sample_v, sample_u]
             )
-            edge_keep = depth_edge_keep_mask(
-                depth,
-                full_valid,
-                radius_px=int(depth_edge_radius_px),
-                abs_threshold_m=float(depth_edge_abs_m),
-                rel_ratio=float(depth_edge_rel_ratio),
-                min_valid_neighbors=int(depth_edge_min_valid_neighbors),
-            )
-            valid = depth_range_valid & edge_keep[sample_v, sample_u]
-            frame_edge_retained = int(np.count_nonzero(valid))
-            depth_edge_rejected += frame_valid_count - frame_edge_retained
-        else:
-            valid = depth_range_valid
-            frame_edge_retained = frame_valid_count
+        )
+        quality_removed = frame_valid_count - frame_edge_retained
+        depth_edge_rejected += local_rejected
+        depth_quality_rejected += quality_removed
+        frame_reports[frame_index]["depth_quality_removed_count"] = quality_removed
+        resolved_hard = depth_quality.resolved_hard_depth_m
+        frame_far_rejected = (
+            int(np.count_nonzero(depth_range_valid & (d / 1000.0 >= resolved_hard)))
+            if resolved_hard is not None
+            else 0
+        )
+        far_depth_rejected += frame_far_rejected
         depth_edge_retained += frame_edge_retained
+        frame_reports[frame_index].update(
+            {
+                "far_risk_count": int(
+                    np.count_nonzero(depth_quality.far_risk_mask[sample_v, sample_u])
+                ),
+                "far_hard_removed_count": frame_far_rejected,
+                "resolved_far_hard_m": resolved_hard,
+                "detected_far_peaks_m": ";".join(
+                    f"{value:.3f}" for value in depth_quality.detected_far_peaks_m
+                ),
+                "confidence_status": depth_quality.report["confidence_status"],
+                "depth_p50_m": depth_quality.report["depth_quantiles_m"].get("0.5"),
+                "depth_p95_m": depth_quality.report["depth_quantiles_m"].get("0.95"),
+                "depth_p99_m": depth_quality.report["depth_quantiles_m"].get("0.99"),
+            }
+        )
         if frame_edge_retained == 0:
             continue
         u = sample_u[valid].astype(np.float64)
         v = sample_v[valid].astype(np.float64)
         z = d[valid] / 1000.0
         edge_pass = np.ones(len(z), dtype=np.int64)
+        far_risk = depth_quality.far_risk_mask[sample_v[valid], sample_u[valid]]
         points_camera = np.column_stack(
             (
                 (u - camera.cx) * z / camera.fx,
@@ -871,6 +1394,76 @@ def build_point_cloud(
         colors = color_bgr[sample_v[valid], sample_u[valid], ::-1].astype(
             np.uint8, copy=False
         )
+        rotation = cloud_rotations[frame_index]
+        camera_position = cloud_positions[frame_index] + rotation @ camera_offset
+        points_enu = points_camera @ rotation.T + camera_position
+
+        temporal_tests = np.zeros(len(points_enu), dtype=np.uint8)
+        temporal_support = np.zeros(len(points_enu), dtype=np.uint8)
+        temporal_contradictions = np.zeros(len(points_enu), dtype=np.uint8)
+        if temporal_enabled and len(points_enu):
+            neighbor_sequence_indices = range(
+                max(0, sequence_index - 2),
+                min(len(selected), sequence_index + 3),
+            )
+            for neighbor_sequence_index in neighbor_sequence_indices:
+                if neighbor_sequence_index == sequence_index:
+                    continue
+                neighbor_index = selected[neighbor_sequence_index]
+                time_delta_s = abs(
+                    float(frames[neighbor_index].monotonic_ns - frame.monotonic_ns)
+                    / 1e9
+                )
+                if time_delta_s > temporal_window_seconds:
+                    continue
+                neighbor_depth, neighbor_quality, _available = load_depth_quality(
+                    neighbor_index
+                )
+                neighbor_rotation = cloud_rotations[neighbor_index]
+                neighbor_position = (
+                    cloud_positions[neighbor_index]
+                    + neighbor_rotation @ camera_offset
+                )
+                states = classify_projective_depth(
+                    points_enu,
+                    camera,
+                    neighbor_position,
+                    neighbor_rotation,
+                    neighbor_depth,
+                    neighbor_quality.valid_mask,
+                    absolute_tolerance_m=temporal_depth_abs_m,
+                    relative_tolerance_ratio=temporal_depth_rel_ratio,
+                )
+                temporal_support += (
+                    states == int(TemporalDepthState.SUPPORT)
+                ).astype(np.uint8)
+                temporal_contradictions += (
+                    states == int(TemporalDepthState.FREE_SPACE_CONTRADICTION)
+                ).astype(np.uint8)
+            temporal_tests = temporal_support + temporal_contradictions
+            reject_temporal = (
+                (temporal_contradictions > temporal_max_free_space_contradictions)
+                & (temporal_support == 0)
+            )
+            removed_temporal = int(np.count_nonzero(reject_temporal))
+            temporal_rejected += removed_temporal
+            frame_reports[frame_index]["temporal_removed_count"] = removed_temporal
+            if removed_temporal:
+                retain_temporal = ~reject_temporal
+                points_camera = points_camera[retain_temporal]
+                points_enu = points_enu[retain_temporal]
+                colors = colors[retain_temporal]
+                z = z[retain_temporal]
+                edge_pass = edge_pass[retain_temporal]
+                far_risk = far_risk[retain_temporal]
+                temporal_tests = temporal_tests[retain_temporal]
+                temporal_support = temporal_support[retain_temporal]
+                temporal_contradictions = temporal_contradictions[retain_temporal]
+        temporal_test_total += int(np.sum(temporal_tests, dtype=np.int64))
+        temporal_support_total += int(np.sum(temporal_support, dtype=np.int64))
+        temporal_contradiction_total += int(
+            np.sum(temporal_contradictions, dtype=np.int64)
+        )
         frame_cap = int(per_frame_max_points)
         if frame_cap and len(points_camera) > frame_cap:
             keep = np.linspace(0, len(points_camera) - 1, frame_cap, dtype=np.int64)
@@ -879,11 +1472,33 @@ def build_point_cloud(
             colors = colors[keep]
             z = z[keep]
             edge_pass = edge_pass[keep]
+            points_enu = points_enu[keep]
+            far_risk = far_risk[keep]
+            temporal_tests = temporal_tests[keep]
+            temporal_support = temporal_support[keep]
+            temporal_contradictions = temporal_contradictions[keep]
         points_before_voxel += len(points_camera)
-
-        rotation = trajectory.rotations_enu_from_camera[frame_index]
-        camera_position = trajectory.positions_enu_m[frame_index] + rotation @ camera_offset
-        points_enu = points_camera @ rotation.T + camera_position
+        frame_reports[frame_index]["fusion_contribution_count"] = len(points_camera)
+        if len(points_enu):
+            relative_height = points_enu[:, 2] - camera_position[2]
+            cross_track = np.linalg.norm(points_enu[:, :2] - camera_position[:2], axis=1)
+            bounds_min = np.min(points_enu, axis=0)
+            bounds_max = np.max(points_enu, axis=0)
+            frame_reports[frame_index].update(
+                {
+                    "bbox_min_x": float(bounds_min[0]),
+                    "bbox_min_y": float(bounds_min[1]),
+                    "bbox_min_z": float(bounds_min[2]),
+                    "bbox_max_x": float(bounds_max[0]),
+                    "bbox_max_y": float(bounds_max[1]),
+                    "bbox_max_z": float(bounds_max[2]),
+                    "relative_z_p01_m": float(np.quantile(relative_height, 0.01)),
+                    "relative_z_p99_m": float(np.quantile(relative_height, 0.99)),
+                    "cross_track_p95_m": float(np.quantile(cross_track, 0.95)),
+                    "cross_track_p99_m": float(np.quantile(cross_track, 0.99)),
+                }
+            )
+        source_time_s = float(frame.monotonic_ns - time_origin_ns) / 1e9
         accumulator.add(
             _local_voxel_run(
                 points_enu,
@@ -891,8 +1506,35 @@ def build_point_cloud(
                 float(voxel_size_m),
                 depths_m=z,
                 edge_pass=edge_pass,
+                temporal_test_count=temporal_tests,
+                temporal_support_count=temporal_support,
+                temporal_contradiction_count=temporal_contradictions,
+                far_depth_risk=far_risk,
+                frame_id=frame_index,
+                source_time_s=source_time_s,
+                pose_quality_score=float(pose_scores[frame_index]),
             )
         )
+        if support_enabled:
+            near = z < float(support_far_start_m)
+            near_support_accumulator.add(
+                _local_coarse_support_run(
+                    points_enu[near],
+                    z[near],
+                    float(support_voxel_size_m),
+                    time_s=source_time_s,
+                    path_m=float(path_coordinate[frame_index]),
+                )
+            )
+            far_support_accumulator.add(
+                _local_coarse_support_run(
+                    points_enu[~near],
+                    z[~near],
+                    float(support_far_voxel_size_m),
+                    time_s=source_time_s,
+                    path_m=float(path_coordinate[frame_index]),
+                )
+            )
 
         if progress_every and (
             (sequence_index + 1) % int(progress_every) == 0
@@ -911,6 +1553,71 @@ def build_point_cloud(
     points, colors = _averages_from_run(final_run)
     metadata = _metadata_from_run(final_run)
     del final_run, accumulator
+
+    points_before_quality_prefilter = len(points)
+    coarse_support_rejected = 0
+    prefilter_removed_points = np.empty((0, 3), dtype=np.float32)
+    prefilter_removed_colors = np.empty((0, 3), dtype=np.uint8)
+    if support_enabled:
+        near_support_run = near_support_accumulator.finish()
+        far_support_run = far_support_accumulator.finish()
+        support_metadata = _map_coarse_support(
+            points,
+            metadata["mean_depth_m"],
+            near_support_run,
+            far_support_run,
+            near_voxel_size_m=float(support_voxel_size_m),
+            far_voxel_size_m=float(support_far_voxel_size_m),
+            far_start_m=float(support_far_start_m),
+            min_baseline_m=float(support_min_baseline_m),
+            min_time_separation_s=float(support_min_time_separation_s),
+        )
+        metadata.update(support_metadata)
+        independent = metadata["independent_view_count"]
+        low_support = independent < int(support_min_independent_frames)
+        mean_depth = metadata["mean_depth_m"]
+        far = mean_depth >= float(support_far_start_m)
+        middle = (mean_depth >= 12.0) & ~far
+        contradiction = (
+            metadata["temporal_contradiction_count"]
+            > int(temporal_max_free_space_contradictions)
+        ) & (metadata["temporal_support_count"] == 0)
+        high_residual = (
+            np.isfinite(metadata["support_position_std_m"])
+            & (metadata["support_position_std_m"] > max_support_position_std_m)
+        )
+        poor_pose = metadata["pose_quality_score"] < 0.5
+        far_untrusted = (
+            far
+            & low_support
+            & (
+                (metadata["far_depth_risk_count"] > 0)
+                | contradiction
+                | high_residual
+                | poor_pose
+            )
+        )
+        middle_untrusted = middle & low_support & (
+            contradiction | high_residual | poor_pose
+        )
+        support_reject = far_untrusted | middle_untrusted | contradiction
+        coarse_support_rejected = int(np.count_nonzero(support_reject))
+        if coarse_support_rejected:
+            removed_indices = np.flatnonzero(support_reject)
+            sample_cap = int(prefilter_removed_sample_max_points)
+            if sample_cap > 0 and len(removed_indices) > sample_cap:
+                local_keep = spatially_sample_indices(points[removed_indices], sample_cap)
+                removed_indices = removed_indices[local_keep]
+            prefilter_removed_points = points[removed_indices].copy()
+            prefilter_removed_colors = colors[removed_indices].copy()
+            quality_keep = ~support_reject
+            points = points[quality_keep]
+            colors = colors[quality_keep]
+            metadata = {
+                name: values[quality_keep] for name, values in metadata.items()
+            }
+    else:
+        del near_support_accumulator, far_support_accumulator
 
     points_before_final_cap = len(points)
     if points_before_final_cap > int(max_points):
@@ -935,7 +1642,16 @@ def build_point_cloud(
         depth_edge_rejected_count=depth_edge_rejected,
         depth_edge_retained_count=depth_edge_retained,
         confidence_map_available=confidence_map_available,
-        confidence_filter_applied=False,
+        confidence_filter_applied=confidence_filter_applied,
+        depth_quality_rejected_count=depth_quality_rejected,
+        far_depth_rejected_count=far_depth_rejected,
+        temporal_test_count=temporal_test_total,
+        temporal_support_count=temporal_support_total,
+        temporal_contradiction_count=temporal_contradiction_total,
+        temporal_rejected_count=temporal_rejected,
+        coarse_support_rejected_count=coarse_support_rejected,
+        points_before_quality_prefilter=points_before_quality_prefilter,
+        points_after_quality_prefilter=points_before_final_cap,
     )
     return PointCloudResult(
         points_enu_m=points,
@@ -952,4 +1668,21 @@ def build_point_cloud(
         depth_max_m=metadata["depth_max_m"],
         depth_edge_pass_count=metadata["depth_edge_pass_count"],
         source_voxel_key=metadata["source_voxel_key"],
+        support_observation_count=metadata.get("support_observation_count"),
+        support_distinct_frame_count=metadata.get("support_distinct_frame_count"),
+        independent_view_count=metadata.get("independent_view_count"),
+        support_time_span_s=metadata.get("support_time_span_s"),
+        support_path_span_m=metadata.get("support_path_span_m"),
+        support_position_std_m=metadata.get("support_position_std_m"),
+        support_depth_std_m=metadata.get("support_depth_std_m"),
+        temporal_test_count=metadata["temporal_test_count"],
+        temporal_support_count=metadata["temporal_support_count"],
+        temporal_contradiction_count=metadata["temporal_contradiction_count"],
+        far_depth_risk_count=metadata["far_depth_risk_count"],
+        source_frame_id=metadata["source_frame_id"],
+        mean_source_time_s=metadata["mean_source_time_s"],
+        pose_quality_score=metadata["pose_quality_score"],
+        frame_reports=tuple(frame_reports),
+        prefilter_removed_points_enu_m=prefilter_removed_points,
+        prefilter_removed_colors_rgb=prefilter_removed_colors,
     )

@@ -34,6 +34,26 @@ _STAGE_REASON_BITS: Mapping[str, tuple[RemovalReason, ...]] = {
     ),
 }
 _EXPECTED_STAGE_ORDER = tuple(_STAGE_REASON_BITS)
+_TEMPORAL_STAGE_REASON_BITS: Mapping[str, tuple[RemovalReason, ...]] = {
+    "raw": (),
+    "non_finite": (RemovalReason.NON_FINITE,),
+    "temporal_coarse_support": (
+        RemovalReason.TEMPORAL_INCONSISTENT,
+        RemovalReason.FAR_DEPTH_UNTRUSTED,
+        RemovalReason.POOR_POSE_FRAME,
+        RemovalReason.HIGH_POSITION_SPREAD,
+    ),
+    "soft_map_envelope": (RemovalReason.OUTSIDE_VALID_BOUNDS,),
+    "high_position_spread": (),
+    "local_surface": (RemovalReason.BELOW_LOCAL_SURFACE,),
+    "radius_outlier": (RemovalReason.RADIUS_OUTLIER,),
+    "statistical_outlier": (RemovalReason.STATISTICAL_OUTLIER,),
+    "low_support_bright_combined": (
+        RemovalReason.LOW_MULTI_FRAME_SUPPORT,
+        RemovalReason.BRIGHT_LOW_SUPPORT,
+    ),
+}
+_EXPECTED_TEMPORAL_STAGE_ORDER = tuple(_TEMPORAL_STAGE_REASON_BITS)
 _SAMPLE_SELECTION = "deterministic_rank_over_raw_voxel_order"
 
 
@@ -83,14 +103,19 @@ def _iter_stage_masks(
     stages: Sequence[PostprocessStage],
 ) -> Iterator[_StageMasks]:
     actual_order = tuple(stage.stage for stage in stages)
-    if actual_order != _EXPECTED_STAGE_ORDER:
+    if actual_order == _EXPECTED_STAGE_ORDER:
+        stage_reason_bits = _STAGE_REASON_BITS
+    elif actual_order == _EXPECTED_TEMPORAL_STAGE_ORDER:
+        stage_reason_bits = _TEMPORAL_STAGE_REASON_BITS
+    else:
         raise RuntimeError(
             "debug-stage reconstruction requires the documented stage order; "
-            f"expected {_EXPECTED_STAGE_ORDER}, got {actual_order}"
+            f"expected {_EXPECTED_STAGE_ORDER} or "
+            f"{_EXPECTED_TEMPORAL_STAGE_ORDER}, got {actual_order}"
         )
     previous = np.ones(len(reason_bits), dtype=bool)
     for index, stage in enumerate(stages):
-        reasons = _STAGE_REASON_BITS[stage.stage]
+        reasons = stage_reason_bits[stage.stage]
         code = _reason_code(reasons)
         if code:
             removed_delta = previous & ((reason_bits & code) != 0)

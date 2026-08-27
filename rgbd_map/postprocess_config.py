@@ -7,7 +7,13 @@ from typing import Any, Mapping
 import numpy as np
 
 
-POSTPROCESS_PRESET_NAMES = ("off", "conservative", "road-map", "aggressive")
+POSTPROCESS_PRESET_NAMES = (
+    "off",
+    "conservative",
+    "road-map",
+    "aggressive",
+    "road-map-temporal",
+)
 
 
 @dataclass(frozen=True)
@@ -51,6 +57,49 @@ class PostprocessConfig:
     bright_filter_requires_low_support: bool
 
     quality_grid_size_m: float = 0.5
+
+    # Projection-time depth quality. Defaults preserve the legacy presets.
+    far_depth_policy: str = "off"
+    far_depth_soft_start_m: float = 20.0
+    far_depth_hard_m: float = 28.8
+    depth_confidence_threshold: float | None = None
+    depth_confidence_order: str = "higher-is-better"
+    depth_edge_domain: str = "depth"
+    invalid_boundary_erosion_px: int = 0
+    far_speckle_max_pixels: int = 0
+
+    # Quality support is deliberately coarser than the output voxel grid.
+    support_enabled: bool = False
+    support_voxel_size_m: float = 0.15
+    support_far_voxel_size_m: float = 0.25
+    support_far_start_m: float = 20.0
+    support_min_independent_frames: int = 2
+    support_min_baseline_m: float = 0.4
+    support_min_time_separation_s: float = 0.5
+    max_support_position_std_m: float = 0.18
+
+    temporal_enabled: bool = False
+    temporal_window_seconds: float = 0.25
+    temporal_depth_abs_m: float = 0.15
+    temporal_depth_rel_ratio: float = 0.02
+    temporal_max_free_space_contradictions: int = 0
+
+    pose_cloud_policy: str = "keep"
+    pose_cloud_max_edge_dt_s: float = 0.25
+    pose_cloud_min_inliers: int = 24
+    pose_cloud_min_inlier_ratio: float = 0.20
+    pose_cloud_max_reprojection_error_px: float = 2.5
+
+    ground_seed_half_width_m: float = 7.0
+    ground_apply_half_width_m: float = 7.0
+    ground_max_interpolation_gap_m: float = 3.0
+    ground_max_lateral_slope: float = 0.20
+    ground_max_uncertainty_m: float = 0.35
+
+    map_envelope_mode: str = "off"
+    map_corridor_core_half_width_m: float = 10.0
+    map_corridor_soft_half_width_m: float = 25.0
+    map_envelope_end_buffer_m: float = 30.0
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -183,6 +232,25 @@ POSTPROCESS_PRESETS: Mapping[str, _PresetDefinition] = MappingProxyType({
         bright_min_rgb=245,
         bright_max_chroma=12,
     ),
+    "road-map-temporal": _PresetDefinition(
+        **{**_COMMON, "depth_edge_radius_px": 2},
+        depth_edge_abs_m=0.12,
+        depth_edge_rel_ratio=0.02,
+        depth_edge_min_valid_neighbors=8,
+        position_std_floor_m=0.025,
+        position_std_voxel_multiplier=0.0,
+        radius_floor_m=0.18,
+        radius_voxel_multiplier=3.5,
+        radius_outlier_min_neighbors=2,
+        single_frame_min_neighbors=2,
+        statistical_neighbors=16,
+        statistical_std_ratio=3.5,
+        road_corridor_half_width_m=7.0,
+        ground_min_cell_points=8,
+        below_ground_tolerance_m=0.20,
+        bright_min_rgb=248,
+        bright_max_chroma=10,
+    ),
 })
 
 
@@ -311,7 +379,27 @@ def resolve_postprocess_config(
             bright_filter_requires_low_support=(
                 definition.bright_filter_requires_low_support
             ),
+            ground_seed_half_width_m=definition.road_corridor_half_width_m,
+            ground_apply_half_width_m=definition.road_corridor_half_width_m,
         )
+        if name == "road-map-temporal":
+            values = config.to_dict()
+            values.update(
+                {
+                    "far_depth_policy": "adaptive",
+                    "depth_edge_domain": "inverse-depth",
+                    "invalid_boundary_erosion_px": 1,
+                    "far_speckle_max_pixels": 12,
+                    "support_enabled": True,
+                    "temporal_enabled": True,
+                    "pose_cloud_policy": "interpolate",
+                    "ground_seed_half_width_m": 8.0,
+                    "ground_apply_half_width_m": 30.0,
+                    "ground_max_interpolation_gap_m": 4.0,
+                    "map_envelope_mode": "soft",
+                }
+            )
+            config = PostprocessConfig(**values)
     if override_values:
         values = config.to_dict()
         values.update(override_values)
@@ -341,6 +429,11 @@ def _validate_config(config: PostprocessConfig) -> None:
         "statistical_neighbors": 0,
         "ground_min_cell_points": 1,
         "ground_min_neighbor_cells": 1,
+        "invalid_boundary_erosion_px": 0,
+        "far_speckle_max_pixels": 0,
+        "support_min_independent_frames": 1,
+        "temporal_max_free_space_contradictions": 0,
+        "pose_cloud_min_inliers": 0,
     }
     for name, minimum in integer_minima.items():
         value = getattr(config, name)
@@ -356,6 +449,27 @@ def _validate_config(config: PostprocessConfig) -> None:
         "ground_candidate_above_surface_m",
         "ground_max_neighbor_height_delta_m",
         "quality_grid_size_m",
+        "far_depth_soft_start_m",
+        "far_depth_hard_m",
+        "support_voxel_size_m",
+        "support_far_voxel_size_m",
+        "support_far_start_m",
+        "support_min_baseline_m",
+        "support_min_time_separation_s",
+        "max_support_position_std_m",
+        "temporal_window_seconds",
+        "temporal_depth_abs_m",
+        "pose_cloud_max_edge_dt_s",
+        "pose_cloud_min_inlier_ratio",
+        "pose_cloud_max_reprojection_error_px",
+        "ground_seed_half_width_m",
+        "ground_apply_half_width_m",
+        "ground_max_interpolation_gap_m",
+        "ground_max_lateral_slope",
+        "ground_max_uncertainty_m",
+        "map_corridor_core_half_width_m",
+        "map_corridor_soft_half_width_m",
+        "map_envelope_end_buffer_m",
     )
     for name in finite_positive:
         value = float(getattr(config, name))
@@ -392,3 +506,35 @@ def _validate_config(config: PostprocessConfig) -> None:
         raise ValueError("bright_min_rgb must be in [0, 255]")
     if not 0 <= config.bright_max_chroma <= 255:
         raise ValueError("bright_max_chroma must be in [0, 255]")
+    if config.far_depth_policy not in {"off", "fixed", "adaptive"}:
+        raise ValueError("far_depth_policy must be off, fixed, or adaptive")
+    if config.depth_confidence_order not in {
+        "lower-is-better",
+        "higher-is-better",
+    }:
+        raise ValueError("invalid depth_confidence_order")
+    if config.depth_edge_domain not in {"depth", "inverse-depth"}:
+        raise ValueError("invalid depth_edge_domain")
+    if config.pose_cloud_policy not in {"keep", "skip", "interpolate"}:
+        raise ValueError("invalid pose_cloud_policy")
+    if config.map_envelope_mode not in {"off", "soft", "road-only"}:
+        raise ValueError("invalid map_envelope_mode")
+    if config.far_depth_hard_m <= config.far_depth_soft_start_m:
+        raise ValueError("far_depth_hard_m must exceed far_depth_soft_start_m")
+    if config.support_far_voxel_size_m < config.support_voxel_size_m:
+        raise ValueError(
+            "support_far_voxel_size_m must be at least support_voxel_size_m"
+        )
+    if config.ground_apply_half_width_m < config.ground_seed_half_width_m:
+        raise ValueError("ground_apply_half_width_m must cover the seed corridor")
+    if config.map_corridor_soft_half_width_m < config.map_corridor_core_half_width_m:
+        raise ValueError("soft map corridor must cover the core corridor")
+    if (
+        not np.isfinite(config.temporal_depth_rel_ratio)
+        or config.temporal_depth_rel_ratio < 0
+    ):
+        raise ValueError("temporal_depth_rel_ratio must be finite and non-negative")
+    if config.depth_confidence_threshold is not None and not np.isfinite(
+        float(config.depth_confidence_threshold)
+    ):
+        raise ValueError("depth_confidence_threshold must be finite")

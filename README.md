@@ -88,6 +88,7 @@ surface 저점 필터, 밝은 저신뢰 결합 규칙을 순서대로 적용합�
 | `conservative` | 지주·표지판·가드레일 같은 얇은 구조 보존 우선 |
 | `road-map` | 도로 지도용 기본 권장값 |
 | `aggressive` | 제거가 거의 되지 않은 결과를 한 번 비교할 때 사용 |
+| `road-map-temporal` | pose/depth/temporal/coarse support 기반 방사형 고스트 제거 |
 
 ```bash
 .venv/bin/python map_rgbd_gps.py DATASET_PATH \
@@ -108,6 +109,27 @@ surface 저점 필터, 밝은 저신뢰 결합 규칙을 순서대로 적용합�
 `cloud_removed_enu.ply`는 이 상한과 무관하게 기존 전체 출력 계약을 유지합니다.
 진단 상한은 `--debug-stage-max-points`로 조정할 수 있습니다.
 
+방사형 ray/curtain 또는 원거리 양자화 띠에는 `road-map-temporal`을 사용합니다. 출력용
+fine voxel과 별개로 15/25 cm support grid에서 source frame 중복을 제거하고, camera
+baseline 또는 시간 간격을 만족한 독립 view를 셉니다. `occluded_or_unknown`은 삭제 근거가
+아니며 이웃 depth가 후보 위치를 자유 공간으로 관측한 경우만 contradiction으로 셉니다.
+
+```bash
+conda run --no-capture-output -n depth-map-postprocess \
+  python map_rgbd_gps.py DATASET_PATH \
+  --output artifacts/road_map_temporal_smoke \
+  --pose-mode hybrid --cloud-preset dense --max-frames 120 \
+  --postprocess-preset road-map-temporal \
+  --far-depth-policy adaptive \
+  --support-voxel-size-m 0.15 --support-far-voxel-size-m 0.25 \
+  --temporal-window-seconds 0.25 --pose-cloud-policy interpolate \
+  --map-envelope-mode soft --no-auto-postprocess-fallback
+```
+
+Confidence map의 값 방향은 장치별로 다르므로 threshold를 주려면
+`--depth-confidence-order lower-is-better|higher-is-better`도 함께 확인해야 합니다.
+confidence가 없거나 threshold가 지정되지 않으면 비활성 사유가 frame report에 남습니다.
+
 품질 guard가 coverage/구조물 과삭제를 감지하면 동일 raw에서 `conservative`를, 제거가
 사실상 없으면 `aggressive`를 최대 한 번만 시험하고 더 안전한 결과를 선택합니다. RGB-D,
 VO, GPS와 raw 점군을 다시 만들지 않으므로 전체 매핑 실행은 반복되지 않습니다.
@@ -124,8 +146,11 @@ VO, GPS와 raw 점군을 다시 만들지 않으므로 전체 매핑 실행은 �
   --no-auto-postprocess-fallback
 ```
 
-Depth 경계 필터는 3D 투영 전 build 단계이므로 postprocess-only 실행에서 되돌릴 수
-없습니다. `cloud_raw_enu.ply`는 Depth 경계/복셀 집계 후이면서 3D 후처리 전인 원본입니다.
+Depth 품질, pose gate, temporal reprojection과 coarse support는 투영/융합 단계이므로
+postprocess-only 실행에서 복구할 수 없습니다. format v2 provenance가 없는 기존 bundle에
+`road-map-temporal`을 적용하면 report에 `legacy_compatibility_no_coarse_provenance`와
+비파괴 compatibility mode를 기록합니다. 새 `cloud_raw_enu.ply`는 이 prefilter 뒤,
+local ground와 ROR/SOR 전의 `fused_prefiltered_raw`입니다.
 
 ### 백엔드와 흰색 점 정책
 
@@ -297,7 +322,7 @@ CloudCompare에서 `data/cloud_clean_enu.ply`와 raw/removed를 함께 확인하
 
 ## 산출물과 진단
 
-- `data/cloud_raw_enu.ply`: 3D 후처리 전 고밀도 복셀 점군
+- `data/cloud_raw_enu.ply`: format v2 depth/pose/temporal/coarse prefilter 후 fused raw
 - `data/cloud_clean_enu.ply`: 선택된 후처리의 정제 점군
 - `data/cloud_removed_enu.ply`: 대표 제거 사유 색을 입힌 제거점
 - `data/cloud_enu.ply`: `cloud_clean_enu.ply`와 동일한 하위 호환 출력
@@ -310,11 +335,16 @@ CloudCompare에서 `data/cloud_clean_enu.ply`와 raw/removed를 함께 확인하
 - `data/postprocess_parameters.json`: 실제 해석된 프리셋·override·백엔드
 - `data/trajectory.csv`: 프레임별 융합/GPS/그래프 전 GPS 보조 VO 위치와 GNSS 품질
 - `data/odometry.csv`: 매칭·inlier·재투영 오차·GPS 게이트 사유를 포함한 간선 진단
+- `data/pose_frame_quality.csv`: frame별 pose 품질, cloud 사용/보간/제외 사유와 projection 집계
+- `data/depth_frame_quality.json`: depth 분포, far peak/threshold, confidence 및 단계별 기여량
+- `data/cloud_provenance_sample.npz`: source frame/depth/pose/support/temporal compact sample
+- `data/prefilter_removed_sample.npz`: cap 전 제거점의 결정적 sample(제거 발생 시)
 - `data/trajectory.geojson`: 세 궤적의 WGS84 LineString
 - `data/summary.json`: 해석된 설정, 점군 단계별 제거 통계와 품질 요약
 - `data/accuracy_report.json`: VO 채택률과 GPS 대비 잔차 통계
 - `diagnostics/top_before_after.png`, `side_before_after.png`: raw/clean/removed 비교
 - `diagnostics/removed_reason_top.png`: 제거 사유 top view
+- `diagnostics/frame_reject_heatmap.png`, `problem_frame_montage.png`: frame gate 진단
 - `diagnostics/representative_tiles.json`, `run_summary.txt`: 대표 타일과 실행 요약
 - `data/debug_stages/index.json`: 단계 순서, 전체 count, 샘플 상한과 제거 회계 검증
 - `data/debug_stages/NN_stage/`: 단계별 survivor/removal 샘플 PLY·BIN과 `stage.json`

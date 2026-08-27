@@ -97,6 +97,28 @@ def cloud_metadata_arrays(cloud: PointCloudResult) -> dict[str, np.ndarray]:
             if array.shape != (count,):
                 raise ValueError(f"cloud metadata {name} must have shape ({count},)")
             metadata[name] = array
+    for name, dtype in (
+        ("support_observation_count", np.uint32),
+        ("support_distinct_frame_count", np.uint16),
+        ("independent_view_count", np.uint16),
+        ("support_time_span_s", np.float32),
+        ("support_path_span_m", np.float32),
+        ("support_position_std_m", np.float32),
+        ("support_depth_std_m", np.float32),
+        ("temporal_test_count", np.uint16),
+        ("temporal_support_count", np.uint16),
+        ("temporal_contradiction_count", np.uint16),
+        ("far_depth_risk_count", np.uint32),
+        ("source_frame_id", np.int32),
+        ("mean_source_time_s", np.float64),
+        ("pose_quality_score", np.float32),
+    ):
+        value = getattr(cloud, name, None)
+        if value is not None:
+            array = np.asarray(value, dtype=dtype)
+            if array.shape != (count,):
+                raise ValueError(f"cloud metadata {name} must have shape ({count},)")
+            metadata[name] = array
     # source_voxel_key is derivable from XYZ and voxel size and can add 24 bytes
     # per dense point. Keep it in PointCloudResult for in-process alignment tests,
     # but omit the optional redundant array from the required rerun archive.
@@ -118,7 +140,8 @@ def write_raw_cloud_bundle(
         cloud.colors_rgb,
         origin,
         comments={
-            "pointcloud_stage": "raw",
+            "pointcloud_stage": "fused_prefiltered_raw",
+            "pointcloud_format_version": "2",
             "postprocess_preset": postprocess_preset,
         },
     )
@@ -372,7 +395,28 @@ def load_raw_cloud_bundle(output_dir: Path) -> RawCloudBundle:
     # Build-only diagnostic arrays may also be present in the archive. Loading
     # just the four filter inputs avoids hundreds of MB of unnecessary dense-run
     # memory while preserving those extras on disk.
-    metadata = _load_numeric_npz(required["raw metadata"], required_names)
+    optional_names = {
+        "support_observation_count",
+        "support_distinct_frame_count",
+        "independent_view_count",
+        "support_time_span_s",
+        "support_path_span_m",
+        "support_position_std_m",
+        "support_depth_std_m",
+        "temporal_test_count",
+        "temporal_support_count",
+        "temporal_contradiction_count",
+        "far_depth_risk_count",
+        "source_frame_id",
+        "mean_source_time_s",
+        "pose_quality_score",
+    }
+    with np.load(required["raw metadata"], allow_pickle=False) as archive:
+        available_names = set(archive.files)
+    metadata = _load_numeric_npz(
+        required["raw metadata"],
+        required_names | (optional_names & available_names),
+    )
     for name, values in metadata.items():
         expected_shape = (len(points),)
         if values.shape != expected_shape:

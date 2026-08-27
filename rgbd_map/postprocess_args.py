@@ -91,6 +91,55 @@ def add_postprocess_arguments(parser: argparse.ArgumentParser) -> None:
     group.add_argument("--road-corridor-half-width-m", type=float, default=None)
     group.add_argument("--ground-grid-size-m", type=float, default=None)
     group.add_argument("--below-ground-tolerance-m", type=float, default=None)
+    group.add_argument(
+        "--far-depth-policy",
+        choices=("off", "fixed", "adaptive"),
+        default=None,
+    )
+    group.add_argument("--far-depth-soft-start-m", type=float, default=None)
+    group.add_argument("--far-depth-hard-m", type=float, default=None)
+    group.add_argument("--depth-confidence-threshold", type=float, default=None)
+    group.add_argument(
+        "--depth-confidence-order",
+        choices=("lower-is-better", "higher-is-better"),
+        default=None,
+    )
+    group.add_argument(
+        "--depth-edge-domain",
+        choices=("depth", "inverse-depth"),
+        default=None,
+    )
+    group.add_argument("--support-voxel-size-m", type=float, default=None)
+    group.add_argument("--support-far-voxel-size-m", type=float, default=None)
+    group.add_argument("--support-min-independent-frames", type=int, default=None)
+    group.add_argument("--support-min-baseline-m", type=float, default=None)
+    group.add_argument("--temporal-window-seconds", type=float, default=None)
+    group.add_argument("--temporal-depth-abs-m", type=float, default=None)
+    group.add_argument("--temporal-depth-rel-ratio", type=float, default=None)
+    group.add_argument(
+        "--temporal-max-free-space-contradictions", type=int, default=None
+    )
+    group.add_argument(
+        "--pose-cloud-policy",
+        choices=("keep", "skip", "interpolate"),
+        default=None,
+    )
+    group.add_argument("--pose-cloud-max-edge-dt-s", type=float, default=None)
+    group.add_argument("--pose-cloud-min-inliers", type=int, default=None)
+    group.add_argument("--pose-cloud-min-inlier-ratio", type=float, default=None)
+    group.add_argument(
+        "--pose-cloud-max-reprojection-error-px", type=float, default=None
+    )
+    group.add_argument("--ground-seed-half-width-m", type=float, default=None)
+    group.add_argument("--ground-apply-half-width-m", type=float, default=None)
+    group.add_argument(
+        "--map-envelope-mode",
+        choices=("off", "soft", "road-only"),
+        default=None,
+    )
+    group.add_argument("--map-corridor-core-half-width-m", type=float, default=None)
+    group.add_argument("--map-corridor-soft-half-width-m", type=float, default=None)
+    group.add_argument("--map-envelope-end-buffer-m", type=float, default=None)
 
 
 def resolve_output_options(

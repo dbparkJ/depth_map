@@ -7,6 +7,7 @@ import cv2
 import numpy as np
 
 from .dataset import CameraModel
+from .depth_quality import DepthQualityPolicy, evaluate_depth_quality
 
 
 @dataclass(frozen=True)
@@ -65,6 +66,7 @@ class SiftRgbdOdometry:
         min_gps_translation_ratio: float = 0.15,
         max_gps_translation_ratio: float = 3.0,
         max_rotation_deg: float = 25.0,
+        depth_quality_policy: DepthQualityPolicy | None = None,
     ):
         if not 0.1 <= image_scale <= 1.0:
             raise ValueError("image_scale must be in [0.1, 1.0]")
@@ -83,6 +85,11 @@ class SiftRgbdOdometry:
         self.min_gps_translation_ratio = float(min_gps_translation_ratio)
         self.max_gps_translation_ratio = float(max_gps_translation_ratio)
         self.max_rotation_deg = float(max_rotation_deg)
+        self.depth_quality_policy = depth_quality_policy or DepthQualityPolicy(
+            min_depth_m=float(min_depth_m),
+            max_depth_m=float(max_depth_m),
+        )
+        self.last_depth_quality_report: dict | None = None
         self.detector = cv2.SIFT_create(nfeatures=int(max_features))
         self.matcher = cv2.BFMatcher(cv2.NORM_L2, crossCheck=False)
 
@@ -115,6 +122,7 @@ class SiftRgbdOdometry:
         current: FeatureFrame,
         previous_depth_path: Path,
         gps_distance_m: float,
+        previous_confidence_path: Path | None = None,
     ) -> OdometryResult:
         if previous.descriptors is None or current.descriptors is None:
             return OdometryResult.failed("missing_descriptors")
@@ -128,7 +136,13 @@ class SiftRgbdOdometry:
 
         previous_px = np.asarray([previous.points_px[m.queryIdx] for m in good], dtype=np.float32)
         current_px = np.asarray([current.points_px[m.trainIdx] for m in good], dtype=np.float32)
-        pnp = self._estimate_pnp(previous_px, current_px, previous_depth_path, gps_distance_m)
+        pnp = self._estimate_pnp(
+            previous_px,
+            current_px,
+            previous_depth_path,
+            gps_distance_m,
+            previous_confidence_path,
+        )
         if pnp.success:
             return pnp
 
@@ -145,10 +159,20 @@ class SiftRgbdOdometry:
         current_px: np.ndarray,
         previous_depth_path: Path,
         gps_distance_m: float,
+        confidence_path: Path | None = None,
     ) -> OdometryResult:
         depth = cv2.imread(str(previous_depth_path), cv2.IMREAD_UNCHANGED)
         if depth is None or depth.ndim != 2:
             return OdometryResult.failed("depth_decode_failed", len(previous_px))
+        confidence = None
+        if confidence_path is not None and confidence_path.is_file():
+            confidence = cv2.imread(str(confidence_path), cv2.IMREAD_UNCHANGED)
+        quality = evaluate_depth_quality(
+            depth,
+            self.depth_quality_policy,
+            confidence,
+        )
+        self.last_depth_quality_report = quality.report
 
         uv = np.rint(previous_px).astype(np.int32)
         inside = (
@@ -159,12 +183,8 @@ class SiftRgbdOdometry:
         )
         depths = np.zeros(len(uv), dtype=np.float64)
         depths[inside] = depth[uv[inside, 1], uv[inside, 0]].astype(np.float64)
-        valid = (
-            inside
-            & (depths >= self.min_depth_mm)
-            & (depths <= self.max_depth_mm)
-            & (depths != 65535.0)
-        )
+        valid = inside.copy()
+        valid[inside] &= quality.valid_mask[uv[inside, 1], uv[inside, 0]]
         if int(np.count_nonzero(valid)) < self.min_pnp_points:
             return OdometryResult.failed("too_few_depth_matches", len(previous_px))
 

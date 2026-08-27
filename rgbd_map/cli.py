@@ -9,15 +9,26 @@ from pathlib import Path
 import numpy as np
 
 from .dataset import RgbdGpsDataset
+from .depth_quality import DepthQualityPolicy
 from .exporters import cloud_build_stats_summary, export_mapping
 from .geodesy import LocalENU
 from .odometry import OdometryResult, SiftRgbdOdometry
-from .pointcloud import build_point_cloud
+from .frame_quality import (
+    audit_cloud_frames,
+    write_frame_quality_diagnostics,
+    write_pose_frame_quality_csv,
+)
+from .pointcloud import build_point_cloud, spatially_sample_indices
 from .postprocess_args import add_postprocess_arguments, resolve_output_options
 from .postprocess_backends import resolve_ground_backend, resolve_neighbor_backend
 from .postprocess_config import resolve_postprocess_config
-from .postprocess_io import write_raw_cloud_bundle
+from .postprocess_io import (
+    atomic_json_dump,
+    atomic_savez_compressed,
+    write_raw_cloud_bundle,
+)
 from .postprocess_runner import execute_postprocess, write_postprocess_execution
+from .registration_quality import compute_adjacent_frame_registration_quality
 from .trajectory import build_trajectory
 
 
@@ -281,6 +292,7 @@ def _estimate_odometry(
     frames,
     gps_positions: np.ndarray,
     args: argparse.Namespace,
+    depth_quality_policy: DepthQualityPolicy,
 ) -> list[OdometryResult]:
     results = [OdometryResult.failed("origin")]
     if args.pose_mode == "gps":
@@ -293,6 +305,7 @@ def _estimate_odometry(
         max_features=args.sift_features,
         min_depth_m=args.min_depth_m,
         max_depth_m=args.max_depth_m,
+        depth_quality_policy=depth_quality_policy,
     )
     previous_features = estimator.extract(frames[0].rgb_path)
     for index in range(1, len(frames)):
@@ -303,6 +316,7 @@ def _estimate_odometry(
             current_features,
             frames[index - 1].depth_path,
             gps_distance,
+            frames[index - 1].confidence_path,
         )
         results.append(result)
         previous_features = current_features
@@ -328,6 +342,23 @@ def run(args: argparse.Namespace) -> dict:
         args,
     )
     output_options = resolve_output_options(args, postprocess_config)
+    depth_quality_policy = DepthQualityPolicy(
+        min_depth_m=float(args.min_depth_m),
+        max_depth_m=float(args.max_depth_m),
+        far_depth_policy=postprocess_config.far_depth_policy,
+        far_depth_soft_start_m=postprocess_config.far_depth_soft_start_m,
+        far_depth_hard_m=postprocess_config.far_depth_hard_m,
+        confidence_threshold=postprocess_config.depth_confidence_threshold,
+        confidence_order=postprocess_config.depth_confidence_order,
+        edge_enabled=postprocess_config.depth_edge_filter,
+        edge_domain=postprocess_config.depth_edge_domain,
+        edge_radius_px=postprocess_config.depth_edge_radius_px,
+        edge_abs_m=postprocess_config.depth_edge_abs_m,
+        edge_rel_ratio=postprocess_config.depth_edge_rel_ratio,
+        edge_min_valid_neighbors=postprocess_config.depth_edge_min_valid_neighbors,
+        invalid_boundary_erosion_px=postprocess_config.invalid_boundary_erosion_px,
+        far_speckle_max_pixels=postprocess_config.far_speckle_max_pixels,
+    )
     # Explicit unavailable backends fail before RGB-D/VO work begins.
     resolve_neighbor_backend(getattr(args, "neighbor_backend", "auto"))
     resolve_ground_backend(getattr(args, "ground_backend", "auto"))
@@ -365,7 +396,9 @@ def run(args: argparse.Namespace) -> dict:
         f"pose_mode={args.pose_mode}",
         flush=True,
     )
-    odometry = _estimate_odometry(dataset, frames, gps_positions, args)
+    odometry = _estimate_odometry(
+        dataset, frames, gps_positions, args, depth_quality_policy
+    )
     trajectory = build_trajectory(
         gps,
         gps_positions,
@@ -386,6 +419,18 @@ def run(args: argparse.Namespace) -> dict:
         camera_offset_right_m=args.camera_offset_right_m,
         camera_offset_down_m=args.camera_offset_down_m,
         camera_offset_forward_m=args.camera_offset_forward_m,
+    )
+    frame_audit = audit_cloud_frames(
+        frames,
+        trajectory,
+        odometry,
+        policy=postprocess_config.pose_cloud_policy,
+        max_edge_dt_s=postprocess_config.pose_cloud_max_edge_dt_s,
+        min_inliers=postprocess_config.pose_cloud_min_inliers,
+        min_inlier_ratio=postprocess_config.pose_cloud_min_inlier_ratio,
+        max_reprojection_error_px=(
+            postprocess_config.pose_cloud_max_reprojection_error_px
+        ),
     )
     cloud = None
     if not args.trajectory_only:
@@ -411,6 +456,29 @@ def run(args: argparse.Namespace) -> dict:
             depth_edge_rel_ratio=postprocess_config.depth_edge_rel_ratio,
             depth_edge_min_valid_neighbors=(
                 postprocess_config.depth_edge_min_valid_neighbors
+            ),
+            depth_quality_policy=depth_quality_policy,
+            frame_audit=frame_audit,
+            support_enabled=postprocess_config.support_enabled,
+            support_voxel_size_m=postprocess_config.support_voxel_size_m,
+            support_far_voxel_size_m=postprocess_config.support_far_voxel_size_m,
+            support_far_start_m=postprocess_config.support_far_start_m,
+            support_min_independent_frames=(
+                postprocess_config.support_min_independent_frames
+            ),
+            support_min_baseline_m=postprocess_config.support_min_baseline_m,
+            support_min_time_separation_s=(
+                postprocess_config.support_min_time_separation_s
+            ),
+            max_support_position_std_m=(
+                postprocess_config.max_support_position_std_m
+            ),
+            temporal_enabled=postprocess_config.temporal_enabled,
+            temporal_window_seconds=postprocess_config.temporal_window_seconds,
+            temporal_depth_abs_m=postprocess_config.temporal_depth_abs_m,
+            temporal_depth_rel_ratio=postprocess_config.temporal_depth_rel_ratio,
+            temporal_max_free_space_contradictions=(
+                postprocess_config.temporal_max_free_space_contradictions
             ),
             camera_offset_right_m=args.camera_offset_right_m,
             camera_offset_down_m=args.camera_offset_down_m,
@@ -445,6 +513,43 @@ def run(args: argparse.Namespace) -> dict:
     parameters["resolved_cloud_config"] = asdict(cloud_config)
     parameters["resolved_postprocess_config"] = postprocess_config.to_dict()
     parameters["raw_build_postprocess_config"] = postprocess_config.to_dict()
+    parameters["pointcloud_format_version"] = 2
+    parameters["cloud_raw_stage"] = "fused_prefiltered_raw"
+    parameters["resolved_depth_quality_policy"] = depth_quality_policy.to_dict()
+    parameters["pose_frame_audit"] = frame_audit.metrics
+    parameters["calibration_assumptions"] = {
+        "mount_rotation_deg": [
+            float(args.mount_roll_deg),
+            float(args.mount_pitch_deg),
+            float(args.mount_yaw_deg),
+        ],
+        "gnss_to_camera_lever_arm_camera_axes_m": [
+            float(args.camera_offset_right_m),
+            float(args.camera_offset_down_m),
+            float(args.camera_offset_forward_m),
+        ],
+        "rgbd_gnss_timestamp_offset_s": 0.0,
+        "warning": (
+            "Mount rotation, GNSS-camera lever arm and timestamp offset are not "
+            "estimated by this pipeline. Zero values are assumptions, not calibration."
+        ),
+    }
+    if postprocess_config.preset == "road-map-temporal" and all(
+        float(value) == 0.0
+        for value in (
+            args.mount_roll_deg,
+            args.mount_pitch_deg,
+            args.mount_yaw_deg,
+            args.camera_offset_right_m,
+            args.camera_offset_down_m,
+            args.camera_offset_forward_m,
+        )
+    ):
+        print(
+            "[warning] mount rotation and GNSS-camera lever arm are all zero; "
+            "timestamp offset is also assumed zero. These are uncalibrated assumptions.",
+            flush=True,
+        )
     parameters["postprocess_output_options"] = asdict(output_options)
     parameters["cloud_frame_selection"] = (
         "keyframe"
@@ -462,8 +567,77 @@ def run(args: argparse.Namespace) -> dict:
     output_dir = Path(args.output).expanduser().resolve()
     cloud_summary_override = None
     postprocess_execution = None
+    if cloud is None:
+        write_pose_frame_quality_csv(
+            output_dir / "data" / "pose_frame_quality.csv", frame_audit
+        )
     if cloud is not None:
         data_dir = output_dir / "data"
+        write_pose_frame_quality_csv(
+            data_dir / "pose_frame_quality.csv",
+            frame_audit,
+            cloud.frame_reports,
+        )
+        atomic_json_dump(
+            data_dir / "depth_frame_quality.json",
+            {
+                "format_version": 1,
+                "depth_quality_policy": depth_quality_policy.to_dict(),
+                "pose_audit": frame_audit.metrics,
+                "frames": list(cloud.frame_reports),
+            },
+        )
+        write_frame_quality_diagnostics(
+            output_dir / "diagnostics",
+            frames,
+            frame_audit,
+            cloud.frame_reports,
+        )
+        sample_count = min(500_000, len(cloud.points_enu_m))
+        sample_indices = (
+            spatially_sample_indices(cloud.points_enu_m, sample_count)
+            if sample_count and sample_count < len(cloud.points_enu_m)
+            else np.arange(sample_count, dtype=np.int64)
+        )
+        if sample_count:
+            sample_arrays: dict[str, np.ndarray] = {
+                "points_xyz": cloud.points_enu_m[sample_indices],
+                "colors_rgb": cloud.colors_rgb[sample_indices],
+                "mean_depth_m": cloud.mean_depth_m[sample_indices],
+                "source_frame_id": cloud.source_frame_id[sample_indices],
+                "pose_quality_score": cloud.pose_quality_score[sample_indices],
+                "temporal_support_count": cloud.temporal_support_count[sample_indices],
+                "temporal_contradiction_count": (
+                    cloud.temporal_contradiction_count[sample_indices]
+                ),
+            }
+            if cloud.independent_view_count is not None:
+                sample_arrays["independent_view_count"] = (
+                    cloud.independent_view_count[sample_indices]
+                )
+                sample_arrays["support_position_std_m"] = (
+                    cloud.support_position_std_m[sample_indices]
+                )
+            atomic_savez_compressed(
+                data_dir / "cloud_provenance_sample.npz", **sample_arrays
+            )
+        atomic_json_dump(
+            data_dir / "registration_quality.json",
+            compute_adjacent_frame_registration_quality(
+                cloud.points_enu_m,
+                cloud.source_frame_id,
+                cloud.mean_depth_m,
+            ),
+        )
+        if (
+            cloud.prefilter_removed_points_enu_m is not None
+            and len(cloud.prefilter_removed_points_enu_m)
+        ):
+            atomic_savez_compressed(
+                data_dir / "prefilter_removed_sample.npz",
+                points_xyz=cloud.prefilter_removed_points_enu_m,
+                colors_rgb=cloud.prefilter_removed_colors_rgb,
+            )
         if output_options.keep_raw_cloud:
             write_raw_cloud_bundle(
                 data_dir,

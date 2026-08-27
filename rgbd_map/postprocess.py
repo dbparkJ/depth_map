@@ -18,6 +18,7 @@ from .postprocess_backends import (
     tiled_neighbor_filter,
 )
 from .postprocess_config import PostprocessConfig
+from .trajectory_geometry import project_to_trajectory_polyline
 
 
 _TRAJECTORY_QUALITY_SEGMENT_LENGTH_M = 10.0
@@ -34,11 +35,17 @@ class RemovalReason(IntFlag):
     BELOW_LOCAL_SURFACE = 1 << 5
     BRIGHT_LOW_SUPPORT = 1 << 6
     OUTSIDE_VALID_BOUNDS = 1 << 7
+    TEMPORAL_INCONSISTENT = 1 << 8
+    FAR_DEPTH_UNTRUSTED = 1 << 9
+    POOR_POSE_FRAME = 1 << 10
 
 
 PRIMARY_REASON_PRIORITY = (
     RemovalReason.NON_FINITE,
     RemovalReason.OUTSIDE_VALID_BOUNDS,
+    RemovalReason.TEMPORAL_INCONSISTENT,
+    RemovalReason.FAR_DEPTH_UNTRUSTED,
+    RemovalReason.POOR_POSE_FRAME,
     RemovalReason.BELOW_LOCAL_SURFACE,
     RemovalReason.HIGH_POSITION_SPREAD,
     RemovalReason.RADIUS_OUTLIER,
@@ -51,6 +58,9 @@ PRIMARY_REASON_PRIORITY = (
 REMOVAL_REASON_COLORS_RGB: Mapping[RemovalReason, tuple[int, int, int]] = {
     RemovalReason.NON_FINITE: (30, 90, 255),
     RemovalReason.OUTSIDE_VALID_BOUNDS: (30, 90, 255),
+    RemovalReason.TEMPORAL_INCONSISTENT: (255, 0, 110),
+    RemovalReason.FAR_DEPTH_UNTRUSTED: (155, 70, 255),
+    RemovalReason.POOR_POSE_FRAME: (120, 120, 120),
     RemovalReason.BELOW_LOCAL_SURFACE: (255, 35, 35),
     RemovalReason.HIGH_POSITION_SPREAD: (255, 30, 210),
     RemovalReason.RADIUS_OUTLIER: (255, 230, 25),
@@ -66,6 +76,20 @@ class PointCloudMetadata:
     distinct_frame_count: np.ndarray
     position_std_m: np.ndarray
     mean_depth_m: np.ndarray
+    support_observation_count: np.ndarray | None = None
+    support_distinct_frame_count: np.ndarray | None = None
+    independent_view_count: np.ndarray | None = None
+    support_time_span_s: np.ndarray | None = None
+    support_path_span_m: np.ndarray | None = None
+    support_position_std_m: np.ndarray | None = None
+    support_depth_std_m: np.ndarray | None = None
+    temporal_test_count: np.ndarray | None = None
+    temporal_support_count: np.ndarray | None = None
+    temporal_contradiction_count: np.ndarray | None = None
+    far_depth_risk_count: np.ndarray | None = None
+    source_frame_id: np.ndarray | None = None
+    pose_quality_score: np.ndarray | None = None
+    coarse_provenance_available: bool = False
 
 
 @dataclass(frozen=True)
@@ -109,6 +133,12 @@ class QualityGuardResult:
     empty_clean_trajectory_segment_count: int = 0
     trajectory_segment_coverage_retention: float | None = None
     empty_clean_trajectory_segment_indices: tuple[int, ...] = ()
+    trusted_anchor_retention: float | None = None
+    raw_trusted_anchor_point_count: int = 0
+    clean_trusted_anchor_point_count: int = 0
+    trusted_core_occupied_cell_retention: float | None = None
+    raw_trusted_core_occupied_cells: int = 0
+    clean_trusted_core_occupied_cells: int = 0
 
     def to_dict(self) -> dict[str, Any]:
         value = asdict(self)
@@ -169,6 +199,16 @@ def coerce_point_metadata(
     legacy clouds are not deleted merely because historical metadata is absent.
     """
 
+    coarse_names = (
+        "support_observation_count",
+        "support_distinct_frame_count",
+        "independent_view_count",
+        "support_position_std_m",
+    )
+    coarse_available = all(
+        _metadata_value(metadata, name) is not None for name in coarse_names
+    )
+    safe_support = max(1, int(default_distinct_frame_count))
     defaults: dict[str, np.ndarray] = {
         "observation_count": np.full(
             point_count, max(1, int(default_distinct_frame_count)), dtype=np.int32
@@ -178,6 +218,25 @@ def coerce_point_metadata(
         ),
         "position_std_m": np.zeros(point_count, dtype=np.float32),
         "mean_depth_m": np.full(point_count, np.nan, dtype=np.float32),
+        "support_observation_count": np.full(
+            point_count, safe_support, dtype=np.int32
+        ),
+        "support_distinct_frame_count": np.full(
+            point_count, safe_support, dtype=np.int32
+        ),
+        "independent_view_count": np.full(
+            point_count, safe_support, dtype=np.int32
+        ),
+        "support_time_span_s": np.zeros(point_count, dtype=np.float32),
+        "support_path_span_m": np.zeros(point_count, dtype=np.float32),
+        "support_position_std_m": np.full(point_count, np.nan, dtype=np.float32),
+        "support_depth_std_m": np.full(point_count, np.nan, dtype=np.float32),
+        "temporal_test_count": np.zeros(point_count, dtype=np.int16),
+        "temporal_support_count": np.zeros(point_count, dtype=np.int16),
+        "temporal_contradiction_count": np.zeros(point_count, dtype=np.int16),
+        "far_depth_risk_count": np.zeros(point_count, dtype=np.int32),
+        "source_frame_id": np.full(point_count, -1, dtype=np.int32),
+        "pose_quality_score": np.ones(point_count, dtype=np.float32),
     }
     arrays: dict[str, np.ndarray] = {}
     for name, default in defaults.items():
@@ -195,7 +254,17 @@ def coerce_point_metadata(
 
     raw_observation_count = np.asarray(arrays["observation_count"])
     raw_distinct_frame_count = np.asarray(arrays["distinct_frame_count"])
-    count_arrays = (raw_observation_count, raw_distinct_frame_count)
+    count_arrays = (
+        raw_observation_count,
+        raw_distinct_frame_count,
+        np.asarray(arrays["support_observation_count"]),
+        np.asarray(arrays["support_distinct_frame_count"]),
+        np.asarray(arrays["independent_view_count"]),
+        np.asarray(arrays["temporal_test_count"]),
+        np.asarray(arrays["temporal_support_count"]),
+        np.asarray(arrays["temporal_contradiction_count"]),
+        np.asarray(arrays["far_depth_risk_count"]),
+    )
     for count_array in count_arrays:
         if np.iscomplexobj(count_array):
             raise ValueError("metadata observation counts must be finite integers")
@@ -224,11 +293,45 @@ def coerce_point_metadata(
         raise ValueError("position_std_m cannot contain finite negative values")
     if np.any(np.isfinite(mean_depth_m) & (mean_depth_m < 0.0)):
         raise ValueError("mean_depth_m cannot contain finite negative values")
+    support_observation_count = np.asarray(
+        arrays["support_observation_count"], dtype=np.int64
+    )
+    support_distinct_frame_count = np.asarray(
+        arrays["support_distinct_frame_count"], dtype=np.int64
+    )
+    independent_view_count = np.asarray(arrays["independent_view_count"], dtype=np.int64)
+    if np.any(support_distinct_frame_count > support_observation_count):
+        raise ValueError("coarse distinct frame count exceeds observations")
+    if np.any(independent_view_count > support_distinct_frame_count):
+        raise ValueError("independent view count exceeds coarse frame count")
+    pose_quality = np.asarray(arrays["pose_quality_score"], dtype=np.float32)
+    if np.any(~np.isfinite(pose_quality)) or np.any((pose_quality < 0) | (pose_quality > 1)):
+        raise ValueError("pose_quality_score must be finite and in [0, 1]")
     return PointCloudMetadata(
         observation_count=observation_count,
         distinct_frame_count=distinct_frame_count,
         position_std_m=position_std_m,
         mean_depth_m=mean_depth_m,
+        support_observation_count=support_observation_count,
+        support_distinct_frame_count=support_distinct_frame_count,
+        independent_view_count=independent_view_count,
+        support_time_span_s=np.asarray(arrays["support_time_span_s"], dtype=np.float32),
+        support_path_span_m=np.asarray(arrays["support_path_span_m"], dtype=np.float32),
+        support_position_std_m=np.asarray(
+            arrays["support_position_std_m"], dtype=np.float32
+        ),
+        support_depth_std_m=np.asarray(arrays["support_depth_std_m"], dtype=np.float32),
+        temporal_test_count=np.asarray(arrays["temporal_test_count"], dtype=np.int64),
+        temporal_support_count=np.asarray(
+            arrays["temporal_support_count"], dtype=np.int64
+        ),
+        temporal_contradiction_count=np.asarray(
+            arrays["temporal_contradiction_count"], dtype=np.int64
+        ),
+        far_depth_risk_count=np.asarray(arrays["far_depth_risk_count"], dtype=np.int64),
+        source_frame_id=np.asarray(arrays["source_frame_id"], dtype=np.int32),
+        pose_quality_score=pose_quality,
+        coarse_provenance_available=coarse_available,
     )
 
 
@@ -313,6 +416,85 @@ def _stage(
         removed_count=input_count - output_count,
         seconds=float(seconds),
     )
+
+
+def _map_envelope_reject_mask(
+    points: np.ndarray,
+    metadata: PointCloudMetadata,
+    trajectory_enu_m: np.ndarray | None,
+    config: PostprocessConfig,
+) -> tuple[np.ndarray, dict[str, Any]]:
+    reject = np.zeros(len(points), dtype=bool)
+    if (
+        config.map_envelope_mode == "off"
+        or trajectory_enu_m is None
+        or len(points) == 0
+    ):
+        return reject, {"status": "disabled", "mode": config.map_envelope_mode}
+    trajectory = np.asarray(trajectory_enu_m, dtype=np.float64)
+    if trajectory.ndim != 2 or trajectory.shape[1:] != (3,) or len(trajectory) < 2:
+        return reject, {"status": "unavailable", "mode": config.map_envelope_mode}
+    coordinates = project_to_trajectory_polyline(
+        points,
+        trajectory,
+        endpoint_buffer_m=config.map_envelope_end_buffer_m,
+    )
+    outside_soft = (
+        coordinates.cross_track_m > config.map_corridor_soft_half_width_m
+    ) & ~coordinates.in_endpoint_buffer
+    transition = (
+        (coordinates.cross_track_m > config.map_corridor_core_half_width_m)
+        & ~outside_soft
+        & ~coordinates.in_endpoint_buffer
+    )
+    low_support = (
+        metadata.independent_view_count < config.support_min_independent_frames
+    )
+    far = (
+        (metadata.mean_depth_m >= config.far_depth_soft_start_m)
+        | (metadata.far_depth_risk_count > 0)
+    )
+    contradiction = (
+        metadata.temporal_contradiction_count
+        > config.temporal_max_free_space_contradictions
+    ) & (metadata.temporal_support_count == 0)
+    poor_pose = metadata.pose_quality_score < 0.5
+    residual = (
+        np.isfinite(metadata.support_position_std_m)
+        & (metadata.support_position_std_m > config.max_support_position_std_m)
+    )
+    risk_count = (
+        low_support.astype(np.uint8)
+        + far.astype(np.uint8)
+        + contradiction.astype(np.uint8)
+        + poor_pose.astype(np.uint8)
+        + residual.astype(np.uint8)
+    )
+    if config.map_envelope_mode == "road-only":
+        reject = outside_soft
+    else:
+        reject = outside_soft & (risk_count >= 2)
+        # Inside the transition band only a direct free-space contradiction plus
+        # weak support is strong enough to remove a structure.
+        reject |= transition & contradiction & low_support
+    return reject, {
+        "status": "evaluated",
+        "mode": config.map_envelope_mode,
+        "core_half_width_m": config.map_corridor_core_half_width_m,
+        "soft_half_width_m": config.map_corridor_soft_half_width_m,
+        "endpoint_buffer_m": config.map_envelope_end_buffer_m,
+        "core_point_count": int(
+            np.count_nonzero(
+                coordinates.cross_track_m <= config.map_corridor_core_half_width_m
+            )
+        ),
+        "transition_point_count": int(np.count_nonzero(transition)),
+        "outside_soft_point_count": int(np.count_nonzero(outside_soft)),
+        "endpoint_buffer_point_count": int(
+            np.count_nonzero(coordinates.in_endpoint_buffer)
+        ),
+        "removed_count": int(np.count_nonzero(reject)),
+    }
 
 
 def primary_removal_reasons(reason_bits: np.ndarray) -> np.ndarray:
@@ -501,12 +683,13 @@ def compute_quality_guards(
     removal_ratio = float(1.0 - np.count_nonzero(keep) / raw_count) if raw_count else 0.0
     warnings: list[str] = []
     failed = False
+    temporal_guard = config.preset == "road-map-temporal"
     if xy_retention is not None and xy_retention < 0.90:
         warnings.append("XY coverage retention is below 0.90")
-        failed = True
+        failed |= not temporal_guard
     if corridor_retention is not None and corridor_retention < 0.90:
         warnings.append("trajectory corridor coverage retention is below 0.90")
-        failed = True
+        failed |= not temporal_guard
     if trajectory_segment_metrics["empty_clean_trajectory_segment_count"]:
         warnings.append(
             f"{trajectory_segment_metrics['empty_clean_trajectory_segment_count']} "
@@ -515,7 +698,7 @@ def compute_quality_guards(
     high_retention = _retention(clean_high, raw_high)
     if high_retention is not None and high_retention < 0.85:
         warnings.append("high-structure retention is below 0.85")
-        failed = True
+        failed |= not temporal_guard
     below_reduction = _reduction(clean_below, raw_below)
     if below_reduction is not None and below_reduction < 0.60:
         warnings.append("below-surface candidate reduction is below 0.60")
@@ -525,10 +708,50 @@ def compute_quality_guards(
     if removal_ratio < 0.002 and config.enabled:
         warnings.append("removal ratio is below 0.2%; filtering may have little effect")
     if removal_ratio > 0.35:
-        warnings.append("removal ratio exceeds 35%; over-removal is possible")
-        failed = True
+        warnings.append("removal ratio exceeds 35%; inspect trusted-anchor retention")
+        failed |= not temporal_guard
     if removal_ratio > 0.50:
         warnings.append("removal ratio exceeds the 50% failure threshold")
+
+    trusted_anchor = (
+        finite
+        & (metadata.pose_quality_score >= 0.5)
+        & (metadata.independent_view_count >= config.support_min_independent_frames)
+        & (~np.isfinite(metadata.mean_depth_m) | (metadata.mean_depth_m <= 12.0))
+    )
+    raw_trusted = int(np.count_nonzero(trusted_anchor))
+    clean_trusted = int(np.count_nonzero(trusted_anchor & keep))
+    trusted_retention = _retention(clean_trusted, raw_trusted)
+    trusted_core = trusted_anchor.copy()
+    if trajectory_enu_m is not None and len(points):
+        try:
+            coordinates = project_to_trajectory_polyline(
+                points, np.asarray(trajectory_enu_m, dtype=np.float64)
+            )
+            trusted_core &= (
+                coordinates.cross_track_m <= config.map_corridor_core_half_width_m
+            )
+        except ValueError:
+            pass
+    raw_trusted_core_cells = _occupied_xy_count(
+        points, trusted_core, config.quality_grid_size_m
+    )
+    clean_trusted_core_cells = _occupied_xy_count(
+        points, trusted_core & keep, config.quality_grid_size_m
+    )
+    trusted_core_retention = _retention(
+        clean_trusted_core_cells, raw_trusted_core_cells
+    )
+    if temporal_guard and trusted_retention is not None and trusted_retention < 0.98:
+        warnings.append("trusted near/multi-view anchor retention is below 0.98")
+        failed = True
+    if (
+        temporal_guard
+        and trusted_core_retention is not None
+        and trusted_core_retention < 0.98
+    ):
+        warnings.append("trusted core occupied-cell retention is below 0.98")
+        failed = True
 
     raw_finite = points[finite]
     clean_finite = points[finite & keep]
@@ -572,6 +795,12 @@ def compute_quality_guards(
         maximum_z_retention=maximum_z_retention,
         passed=not failed,
         warnings=tuple(warnings),
+        trusted_anchor_retention=trusted_retention,
+        raw_trusted_anchor_point_count=raw_trusted,
+        clean_trusted_anchor_point_count=clean_trusted,
+        trusted_core_occupied_cell_retention=trusted_core_retention,
+        raw_trusted_core_occupied_cells=raw_trusted_core_cells,
+        clean_trusted_core_occupied_cells=clean_trusted_core_cells,
         **trajectory_segment_metrics,
     )
 
@@ -594,7 +823,14 @@ def fallback_preset_for_quality(
             quality.high_structure_retention is not None
             and quality.high_structure_retention < 0.85
         )
-        or quality.removal_ratio > 0.35
+        or (
+            quality.removal_ratio > 0.35
+            and current_preset != "road-map-temporal"
+        )
+        or (
+            quality.trusted_anchor_retention is not None
+            and quality.trusted_anchor_retention < 0.98
+        )
     )
     if over_removed and current_preset != "conservative":
         return "conservative"
@@ -675,6 +911,117 @@ def run_postprocess(
     after = reason_bits == 0
     stages.append(_stage("non_finite", before, after, time.perf_counter() - started))
 
+    temporal_pipeline = config.preset == "road-map-temporal"
+    provenance_status = (
+        "available"
+        if point_metadata.coarse_provenance_available
+        else "legacy_compatibility_no_coarse_provenance"
+    )
+    if temporal_pipeline:
+        before_temporal = after.copy()
+        started = time.perf_counter()
+        low_coarse_support = (
+            point_metadata.independent_view_count
+            < config.support_min_independent_frames
+        )
+        temporal_inconsistent = (
+            point_metadata.temporal_contradiction_count
+            > config.temporal_max_free_space_contradictions
+        ) & (point_metadata.temporal_support_count == 0)
+        far_depth = (
+            (point_metadata.mean_depth_m >= config.far_depth_soft_start_m)
+            | (point_metadata.far_depth_risk_count > 0)
+        )
+        support_spread = (
+            np.isfinite(point_metadata.support_position_std_m)
+            & (
+                point_metadata.support_position_std_m
+                > config.max_support_position_std_m
+            )
+        )
+        poor_pose = point_metadata.pose_quality_score < 0.5
+        far_untrusted = far_depth & low_coarse_support
+        poor_pose_untrusted = poor_pose & low_coarse_support
+        support_spread_untrusted = support_spread & low_coarse_support
+        combined_low_support = low_coarse_support & (
+            temporal_inconsistent
+            | far_untrusted
+            | poor_pose_untrusted
+            | support_spread_untrusted
+        )
+        if not point_metadata.coarse_provenance_available:
+            # A postprocess-only legacy bundle cannot reconstruct source views or
+            # free-space tests. Its explicit compatibility mode is non-destructive.
+            temporal_inconsistent[:] = False
+            far_untrusted[:] = False
+            poor_pose_untrusted[:] = False
+            support_spread_untrusted[:] = False
+            combined_low_support[:] = False
+        _add_reason(
+            reason_bits,
+            temporal_inconsistent & before_temporal,
+            RemovalReason.TEMPORAL_INCONSISTENT,
+        )
+        _add_reason(
+            reason_bits,
+            far_untrusted & before_temporal,
+            RemovalReason.FAR_DEPTH_UNTRUSTED,
+        )
+        _add_reason(
+            reason_bits,
+            poor_pose_untrusted & before_temporal,
+            RemovalReason.POOR_POSE_FRAME,
+        )
+        _add_reason(
+            reason_bits,
+            support_spread_untrusted & before_temporal,
+            RemovalReason.HIGH_POSITION_SPREAD,
+        )
+        _add_reason(
+            reason_bits,
+            combined_low_support,
+            RemovalReason.LOW_MULTI_FRAME_SUPPORT,
+        )
+        after = reason_bits == 0
+        stages.append(
+            _stage(
+                "temporal_coarse_support",
+                before_temporal,
+                after,
+                time.perf_counter() - started,
+            )
+        )
+
+        before_envelope = after.copy()
+        started = time.perf_counter()
+        envelope_reject, envelope_report = _map_envelope_reject_mask(
+            points,
+            point_metadata,
+            trajectory_enu_m,
+            config,
+        )
+        _add_reason(
+            reason_bits,
+            envelope_reject & before_envelope,
+            RemovalReason.OUTSIDE_VALID_BOUNDS,
+        )
+        after = reason_bits == 0
+        stages.append(
+            _stage(
+                "soft_map_envelope",
+                before_envelope,
+                after,
+                time.perf_counter() - started,
+            )
+        )
+    else:
+        low_coarse_support = np.zeros(count, dtype=bool)
+        temporal_inconsistent = np.zeros(count, dtype=bool)
+        far_untrusted = np.zeros(count, dtype=bool)
+        poor_pose_untrusted = np.zeros(count, dtype=bool)
+        support_spread_untrusted = np.zeros(count, dtype=bool)
+        envelope_report = {"status": "disabled", "mode": config.map_envelope_mode}
+
     before = after.copy()
     started = time.perf_counter()
     high_spread = (
@@ -683,12 +1030,51 @@ def run_postprocess(
         & (point_metadata.position_std_m > config.max_voxel_position_std_m)
         & before
         & config.enabled
+        & (not temporal_pipeline)
     )
     _add_reason(reason_bits, high_spread, RemovalReason.HIGH_POSITION_SPREAD)
     after = reason_bits == 0
     stages.append(
         _stage("high_position_spread", before, after, time.perf_counter() - started)
     )
+
+    ground_surface: GroundSurfaceResult | None = None
+    if temporal_pipeline:
+        before_ground = after.copy()
+        ground_started = time.perf_counter()
+        if config.enabled and selected_ground_backend == "local":
+            ground_surface = estimate_local_ground_surface(
+                points,
+                trajectory_enu_m,
+                config,
+                support_mask=before_ground,
+            )
+            strong_static = (
+                (point_metadata.independent_view_count >= config.support_min_independent_frames)
+                & (point_metadata.pose_quality_score >= 0.5)
+                & (
+                    point_metadata.temporal_contradiction_count
+                    <= config.temporal_max_free_space_contradictions
+                )
+                & (
+                    (point_metadata.temporal_support_count > 0)
+                    | (point_metadata.mean_depth_m <= 12.0)
+                )
+            )
+            _add_reason(
+                reason_bits,
+                ground_surface.below_surface_mask & before_ground & ~strong_static,
+                RemovalReason.BELOW_LOCAL_SURFACE,
+            )
+        after = reason_bits == 0
+        stages.append(
+            _stage(
+                "local_surface",
+                before_ground,
+                after,
+                time.perf_counter() - ground_started,
+            )
+        )
 
     before_radius = after.copy()
     neighbor_indices = np.flatnonzero(before_radius)
@@ -748,41 +1134,50 @@ def run_postprocess(
         )
     )
 
-    before_ground = after_statistical.copy()
-    ground_started = time.perf_counter()
-    ground_surface: GroundSurfaceResult | None = None
-    if config.enabled and selected_ground_backend == "local":
-        ground_surface = estimate_local_ground_surface(
-            points,
-            trajectory_enu_m,
-            config,
-            support_mask=before_ground,
+    if temporal_pipeline:
+        after_ground = after_statistical
+    else:
+        before_ground = after_statistical.copy()
+        ground_started = time.perf_counter()
+        if config.enabled and selected_ground_backend == "local":
+            ground_surface = estimate_local_ground_surface(
+                points,
+                trajectory_enu_m,
+                config,
+                support_mask=before_ground,
+            )
+            _add_reason(
+                reason_bits,
+                ground_surface.below_surface_mask,
+                RemovalReason.BELOW_LOCAL_SURFACE,
+            )
+        after_ground = reason_bits == 0
+        stages.append(
+            _stage(
+                "local_surface",
+                before_ground,
+                after_ground,
+                time.perf_counter() - ground_started,
+            )
         )
-        _add_reason(
-            reason_bits,
-            ground_surface.below_surface_mask,
-            RemovalReason.BELOW_LOCAL_SURFACE,
-        )
-    after_ground = reason_bits == 0
-    stages.append(
-        _stage(
-            "local_surface",
-            before_ground,
-            after_ground,
-            time.perf_counter() - ground_started,
-        )
-    )
 
     # LOW_MULTI_FRAME_SUPPORT is fatal only when another geometric problem is
     # already present. Bright color can annotate such a point, never delete it alone.
     before_combined = after_ground.copy()
     combined_started = time.perf_counter()
-    low_support = point_metadata.distinct_frame_count < config.min_distinct_frames
+    low_support = (
+        low_coarse_support
+        if temporal_pipeline
+        else point_metadata.distinct_frame_count < config.min_distinct_frames
+    )
     geometric_problem_bits = int(
         RemovalReason.HIGH_POSITION_SPREAD
         | RemovalReason.RADIUS_OUTLIER
         | RemovalReason.STATISTICAL_OUTLIER
         | RemovalReason.BELOW_LOCAL_SURFACE
+        | RemovalReason.TEMPORAL_INCONSISTENT
+        | RemovalReason.FAR_DEPTH_UNTRUSTED
+        | RemovalReason.POOR_POSE_FRAME
     )
     geometric_problem = (reason_bits & geometric_problem_bits) != 0
     combined_low_support = low_support & geometric_problem & config.enabled
@@ -832,7 +1227,7 @@ def run_postprocess(
     reason_report = _reason_count_report(reason_bits, primary_reason)
     timing = {stage.stage: stage.seconds for stage in stages}
     report: dict[str, Any] = {
-        "format_version": 1,
+        "format_version": 2,
         "selected_result": f"{selected_ground_backend}_{config.preset.replace('-', '_')}",
         "input": {
             "raw_point_count": count,
@@ -854,6 +1249,51 @@ def run_postprocess(
         "timing_seconds": timing,
         "dependencies": dependencies.to_dict(),
         "parameters": config.to_dict(),
+        "provenance": {
+            "coarse_support_status": provenance_status,
+            "temporal_stage_enabled": temporal_pipeline,
+            "legacy_bundle_behavior": (
+                "not_applicable"
+                if point_metadata.coarse_provenance_available
+                else "explicit_non_destructive_compatibility_mode"
+            ),
+        },
+        "coarse_support": {
+            "available": point_metadata.coarse_provenance_available,
+            "low_support_count": int(np.count_nonzero(low_coarse_support)),
+            "independent_view_count_percentiles": (
+                {
+                    "p50": float(np.percentile(point_metadata.independent_view_count, 50)),
+                    "p95": float(np.percentile(point_metadata.independent_view_count, 95)),
+                    "max": int(np.max(point_metadata.independent_view_count)),
+                }
+                if count
+                else {"p50": 0.0, "p95": 0.0, "max": 0}
+            ),
+            "temporal_inconsistent_count": int(
+                np.count_nonzero(temporal_inconsistent)
+            ),
+            "far_untrusted_count": int(np.count_nonzero(far_untrusted)),
+            "poor_pose_untrusted_count": int(
+                np.count_nonzero(poor_pose_untrusted)
+            ),
+            "high_support_residual_count": int(
+                np.count_nonzero(support_spread_untrusted)
+            ),
+        },
+        "map_envelope": envelope_report,
+        "fine_voxel_position_spread": {
+            "definition": "within_output_voxel_combined_xyz_standard_deviation",
+            "theoretical_upper_bound_m": float(
+                np.sqrt(3.0) * config.voxel_size_m / 2.0
+            ),
+            "configured_threshold_m": config.max_voxel_position_std_m,
+            "threshold_reachable": bool(
+                config.max_voxel_position_std_m
+                <= np.sqrt(3.0) * config.voxel_size_m / 2.0 + 1e-12
+            ),
+            "quality_decisions_use_coarse_support_grid": temporal_pipeline,
+        },
         "neighbor_backend": neighbor_result.backend,
         "ground_backend": selected_ground_backend,
         "neighbor_distance_proxy": neighbor_result.distance_proxy_source,

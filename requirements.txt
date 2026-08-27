@@ -4,4 +4,4 @@ Pillow>=10
 pyproj>=3.6
 scipy>=1.13
 pytest>=8
-
+pyarrow>=17,<24

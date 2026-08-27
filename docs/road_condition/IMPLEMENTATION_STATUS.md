@@ -115,11 +115,12 @@ ground truth가 아직 `unknown`이다. 따라서 실험 threshold는 자동 승
 - [x] lane/shoulder/exclusion zone precedence와 surface filtering
 - [x] 결함 lane/zone attribution, 차로별 segment, ROI/unknown coverage
 - [x] ROI 부재 시 기존 trajectory corridor fallback
-- [ ] 10m core + halo tile
-- [ ] 청크 경계 defect deduplication
-- [ ] route manifest
-- [ ] Parquet partition
-- [ ] resume와 partial failure
+- [x] 10m core + 3m halo tile과 centroid ownership
+- [x] 청크 경계 deterministic defect deduplication과 `merged_from`
+- [x] route/tile manifest
+- [x] tile partition과 route defect/segment Parquet + defect GeoJSON
+- [x] input signature resume와 partial failure
+- [~] 한 mapping chunk씩 streaming; PLY 자체의 spatial streaming loader는 후속 최적화
 
 ### P1: 추가 형상 분석
 

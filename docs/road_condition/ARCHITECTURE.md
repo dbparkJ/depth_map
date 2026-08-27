@@ -397,3 +397,27 @@ body로 전달하지 않는다.
 - 동일 설정 결과 hash
 
 전체 노선보다 먼저 20프레임, 10m, 60초 청크 순으로 확대한다.
+
+## 13. 타일·청크 route 계약
+
+Stage 05 route 분석은 기본 10m core와 앞뒤 3m halo를 사용한다. fitting과 detector는
+core+halo에서 실행하지만 결함 centroid가 들어간 core 하나만 최종 소유한다. tile별
+`status.json`과 input signature가 같으면 완료 tile을 건너뛰며 실패 tile은 route manifest를
+`partial`로 만들 뿐 완료 tile을 무효화하지 않는다.
+
+```text
+route_result/
+  route_manifest.json
+  route_defects.geojson
+  route_defects.parquet
+  route_segments.parquet
+  tiles/tile-000000/status.json
+  tiles/tile-000000/result/defects.parquet
+  tiles/tile-000000/result/segments.parquet
+  tiles/tile-000000/result/...
+```
+
+60초 청크는 각각 독립 처리한 뒤 명시적 global chainage offset으로 결과 파일만 병합한다.
+병합 중에는 point cloud를 다시 열지 않는다. 초기 중복 조건은 동일 defect type,
+chainage/lateral/polygon 거리와 metric 상대차이며 원본 ID는 `merged_from`에 보존한다. 실제
+청크 seam 오차가 unknown이므로 현재 허용치는 experimental이다.

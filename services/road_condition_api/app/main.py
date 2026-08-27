@@ -256,6 +256,20 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 "precedence": ["exclusion", "lane", "shoulder", "road"],
                 "fallback": "trajectory_corridor",
             },
+            "route_processing": {
+                "core_tile_length_m": 10.0,
+                "halo_m": 3.0,
+                "report_segment_length_m": 20.0,
+                "ownership": "defect_centroid_in_core",
+                "resume": True,
+                "execution": "offline_chunk_cli",
+                "outputs": [
+                    "route_manifest",
+                    "route_defects_geojson",
+                    "route_defects_parquet",
+                    "route_segments_parquet",
+                ],
+            },
             "pose_contract": {
                 "camera_poses_format_version": 1,
                 "analysis_source_manifest_format_version": 1,

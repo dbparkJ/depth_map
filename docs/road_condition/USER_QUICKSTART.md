@@ -359,3 +359,28 @@ ROI feature에는 `zone_id`, `zone_type`, `chainage_start_m`, `chainage_end_m`, 
 `confidence`가 필요하고 lane에는 `lane_id`도 필요하다. exclusion이 항상 최우선이며
 shoulder와 unknown은 surface fitting에서 제외된다. ROI가 없으면 기존 corridor 분석으로
 자동 fallback한다.
+
+## 14. Stage 05 resumable route 분석
+
+한 mapping chunk를 10m core + 3m halo tile로 분석한다. 출력 디렉터리에 완료 status와 같은
+input signature가 있으면 재실행하지 않는다. Parquet writer 때문에 `route` extra가 필요하다.
+
+```bash
+.venv/bin/pip install -e '.[route]'
+PYTHONPATH=. .venv/bin/python scripts/road_condition_route.py \
+  artifacts/route_a/temporal_60sec/chunk_0000 \
+  --output artifacts/route_a/road_condition/chunk_0000
+```
+
+청크들을 point cloud 재로딩 없이 route 결과로 병합할 때 각 청크의 global chainage offset을
+명시한다.
+
+```bash
+PYTHONPATH=. .venv/bin/python scripts/road_condition_merge_routes.py \
+  --chunk chunk_0000,artifacts/route_a/road_condition/chunk_0000,0 \
+  --chunk chunk_0001,artifacts/route_a/road_condition/chunk_0001,58.7 \
+  --output artifacts/route_a/road_condition/merged
+```
+
+offset은 실제 trajectory seam 검토 후 확정해야 한다. 현재 merge tolerance는 experimental이며
+청크 pose 오차가 측정되지 않은 상태에서 자동 승인하지 않는다.

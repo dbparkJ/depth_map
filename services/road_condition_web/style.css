@@ -65,6 +65,7 @@ input[type="range"] { padding: 0; accent-color: var(--accent); }
 .quality-banner.ready { border-color: #2f8060; background: linear-gradient(135deg, rgba(47,128,96,.22), rgba(18,37,58,.96)); }
 .quality-heading { display: flex; justify-content: space-between; align-items: center; gap: 16px; }
 .quality-heading strong { display: block; font-size: 24px; }
+.quality-heading small { display: block; margin-top: 4px; color: var(--muted); font-size: 11px; }
 .quality-banner > p { margin: 10px 0 14px; color: #d4e2ec; line-height: 1.55; }
 .reading-guide { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; margin: 0; padding: 0; list-style: none; counter-reset: reading-step; }
 .reading-guide li { counter-increment: reading-step; display: grid; grid-template-columns: auto 1fr; gap: 2px 8px; background: rgba(5,12,21,.5); border: 1px solid rgba(143,169,191,.18); border-radius: 9px; padding: 10px; }

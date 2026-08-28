@@ -32,6 +32,7 @@ def test_web_viewer_has_progressive_route_and_accessibility_contract() -> None:
         "maintenanceBudget",
         "qualityBanner",
         "qualityVerdict",
+        "qualitySource",
         "qualityReasons",
         "coverageGuide",
     ):

@@ -21,7 +21,7 @@
   <main class="layout">
     <aside class="sidebar">
       <section class="panel">
-        <h2>분석 실행</h2>
+        <h2>새 분석 실행</h2>
         <label>입력 종류
           <select id="sourceType">
             <option value="synthetic">내장 합성 도로</option>
@@ -131,7 +131,7 @@
         <div id="renderRecovery" class="notice recovery" hidden role="alert"><strong>렌더링 컨텍스트가 중단되었습니다.</strong><button id="reloadViewer" class="button ghost">뷰어 새로고침</button></div>
         <section id="qualityBanner" class="quality-banner" role="status" aria-live="polite">
           <div class="quality-heading">
-            <div><span class="eyebrow">DATA READINESS</span><strong id="qualityVerdict">판독 상태 확인 중</strong></div>
+            <div><span class="eyebrow">DATA READINESS</span><strong id="qualityVerdict">판독 상태 확인 중</strong><small id="qualitySource">현재 결과 확인 중</small></div>
             <span id="qualityBadge" class="status-pill pending">확인 중</span>
           </div>
           <p id="qualityReasons">결과 품질 정보를 불러오고 있습니다.</p>

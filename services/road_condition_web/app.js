@@ -304,6 +304,7 @@
     const scores = state.summary.scores || {};
     const coverage = state.summary.coverage || {};
     const quality = state.summary.quality || {};
+    const source = state.summary.source || {};
     const minimumCoverage = number(state.summary.parameters?.detection?.minimum_valid_coverage_ratio, 0.5);
     const coverageRatio = number(coverage.valid_coverage_ratio);
     const lowCoverage = coverageRatio < minimumCoverage;
@@ -318,6 +319,11 @@
     $("qualityVerdict").textContent = ready ? "검수 가능한 결과" : "자동 판정 보류";
     $("qualityBadge").textContent = ready ? "검수 가능" : "재검토 필요";
     $("qualityBadge").className = `status-pill ${ready ? "ok" : "error"}`;
+    const sourcePath = String(source.workspace_relative_path || "").split("/").filter(Boolean);
+    const sourceName = source.type === "mapping_bundle"
+      ? `depth_map · ${sourcePath[sourcePath.length - 1] || source.tile_id || "mapping bundle"}`
+      : `합성 도로 · ${source.profile || "profile"}`;
+    $("qualitySource").textContent = `현재 결과: ${sourceName} · 구간 ${format(coverage.chainage_start_m, 1)}–${format(coverage.chainage_end_m, 1)} m`;
     $("qualityReasons").textContent = reasons.length
       ? `${reasons.join(" · ")}. 아래 후보는 현장/RGB 대조 전까지 확정 결함이 아닙니다.`
       : "기본 품질 기준을 통과했습니다. 후보별 현장 검수를 계속 진행하세요.";

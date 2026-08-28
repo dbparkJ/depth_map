@@ -5,6 +5,17 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Depth Map 도로 상태 시뮬레이터</title>
   <link rel="stylesheet" href="./style.css">
+  <script src="./runtime-config.js"></script>
+  <script>
+    (() => {
+      const config = window.ROAD_CONDITION_CONFIG || {};
+      const key = String(config.vworldApiKey || "").trim();
+      const domain = String(config.vworldDomain || "").trim();
+      if (!key || !domain) return;
+      const params = new URLSearchParams({ version: "3.0", apiKey: key, domain });
+      document.write(`<script id="vworldSdk" src="https://map.vworld.kr/js/webglMapInit.js.do?${params}"><\/script>`);
+    })();
+  </script>
 </head>
 <body>
   <header class="topbar">
@@ -147,7 +158,8 @@
           <article><span>검출 후보</span><strong id="defectCandidateCount">-</strong><small id="candidateBreakdown">-</small></article>
           <article><span>최대 포트홀 깊이</span><strong id="maxPotholeDepth">-</strong></article>
           <article><span>최대 러팅 깊이</span><strong id="maxRutDepth">-</strong></article>
-          <article id="coverageCard"><span>표면 커버리지</span><strong id="coverageRatio">-</strong><small id="coverageGuide">-</small></article>
+          <article id="coverageCard"><span>분석 가능 표면</span><strong id="coverageRatio">-</strong><small id="coverageGuide">-</small></article>
+          <article><span>비노면 높이 제외</span><strong id="excludedSurface">-</strong><small id="excludedSurfaceGuide">기준면 잔차 게이트</small></article>
           <article><span>분석 포인트</span><strong id="analyzedPoints">-</strong><small id="samplingInfo">-</small></article>
         </section>
 
@@ -170,6 +182,7 @@
             <canvas id="surfaceCanvas" tabindex="0" aria-label="Local ST 결함 지도. N과 P 키로 결함을 이동합니다."></canvas>
             <canvas id="perspectiveCanvas" tabindex="0" aria-label="잔차 표면 3D evidence" hidden></canvas>
             <canvas id="mapCanvas" tabindex="0" aria-label="Local ENU 지도 adapter" hidden></canvas>
+            <div id="vworldMap" aria-label="VWorld 도로 상태 지도" hidden></div>
           </div>
           <div id="axisNote" class="axis-note">가로: 진행거리 s · 세로: 횡방향 t · 색상: 기준 도로면 대비 높이 잔차</div>
         </section>

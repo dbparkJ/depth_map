@@ -35,6 +35,10 @@ services:
     depends_on:
       road-condition-api:
         condition: service_healthy
+    environment:
+      NGINX_ENVSUBST_OUTPUT_DIR: /usr/share/nginx/html
+      VWORLD_API_KEY: ${VWORLD_API_KEY:-}
+      VWORLD_DOMAIN: ${VWORLD_DOMAIN:-127.0.0.1}
     ports:
       - "${ROAD_CONDITION_WEB_PORT:-8080}:80"
     restart: unless-stopped

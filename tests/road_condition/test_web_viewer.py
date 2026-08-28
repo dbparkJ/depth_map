@@ -21,6 +21,7 @@ def test_web_viewer_has_progressive_route_and_accessibility_contract() -> None:
         "surfaceCanvas",
         "perspectiveCanvas",
         "mapCanvas",
+        "vworldMap",
         "minimumConfidence",
         "compareJob",
         "renderRecovery",
@@ -54,9 +55,10 @@ def test_web_viewer_has_progressive_route_and_accessibility_contract() -> None:
     assert 'number($("potholeDepth").value, 3.5) / 100' in script
     assert 'number($("rutDepth").value, 2.0) / 100' in script
     assert "COPY services/road_condition_web/viewer_core.js" in dockerfile
+    assert "runtime-config.js.template" in dockerfile
 
 
-def test_map_adapters_require_explicit_runtime_configuration() -> None:
+def test_map_adapters_use_explicit_runtime_configuration() -> None:
     viewer = (ROOT / "services/road_condition_web/viewer_core.js").read_text(
         encoding="utf-8"
     )
@@ -65,3 +67,4 @@ def test_map_adapters_require_explicit_runtime_configuration() -> None:
     assert "cesium" in viewer
     assert "WGS84" in viewer
     assert "fallback" in viewer
+    assert "enuFeatureCollectionToWgs84" in viewer

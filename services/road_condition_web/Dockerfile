@@ -5,5 +5,6 @@ COPY services/road_condition_web/index.html /usr/share/nginx/html/index.html
 COPY services/road_condition_web/app.js /usr/share/nginx/html/app.js
 COPY services/road_condition_web/viewer_core.js /usr/share/nginx/html/viewer_core.js
 COPY services/road_condition_web/style.css /usr/share/nginx/html/style.css
+COPY services/road_condition_web/runtime-config.js.template /etc/nginx/templates/runtime-config.js.template
 
 EXPOSE 80

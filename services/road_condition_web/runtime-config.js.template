@@ -1,0 +1,4 @@
+window.ROAD_CONDITION_CONFIG = Object.freeze({
+  vworldApiKey: "${VWORLD_API_KEY}",
+  vworldDomain: "${VWORLD_DOMAIN}"
+});

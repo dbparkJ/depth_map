@@ -18,7 +18,22 @@ assert.equal(viewer.defectVisible({ defect_type: "pothole", confidence: 0.4, qua
 assert.equal(viewer.defectVisible({ defect_type: "ponding_screening_proxy", confidence: 0.8, quality_flags: [] }, { showAdvanced: false }), false);
 assert.equal(viewer.mapAdapterStatus("local_enu").ready, true);
 assert.equal(viewer.mapAdapterStatus("vworld").ready, false);
+assert.equal(viewer.mapAdapterStatus("vworld", { vworldApiKey: "key", vworldDomain: "127.0.0.1" }, { longitude_deg: 127, latitude_deg: 37 }).ready, true);
 assert.equal(viewer.mapAdapterStatus("cesium").ready, false);
+const origin = { longitude_deg: 127, latitude_deg: 37, ellipsoid_height_m: 50 };
+const recoveredOrigin = viewer.enuToWgs84([0, 0, 0], origin);
+assert.ok(Math.abs(recoveredOrigin[0] - origin.longitude_deg) < 1e-9);
+assert.ok(Math.abs(recoveredOrigin[1] - origin.latitude_deg) < 1e-9);
+const east = viewer.enuToWgs84([100, 0, 0], origin);
+const north = viewer.enuToWgs84([0, 100, 0], origin);
+assert.ok(east[0] > origin.longitude_deg);
+assert.ok(north[1] > origin.latitude_deg);
+const converted = viewer.enuFeatureCollectionToWgs84({
+  origin,
+  features: [{ id: "d1", geometry: { type: "Polygon", coordinates: [[[0, 0], [1, 0], [0, 1], [0, 0]]] } }]
+});
+assert.equal(converted.coordinate_system, "EPSG:4326");
+assert.equal(converted.features[0].id, "d1");
 assert.ok(viewer.perspectivePoint(0.5, 0.5, -20, 800, 460, 5).every(Number.isFinite));
 
 console.log("viewer_core contract: ok");

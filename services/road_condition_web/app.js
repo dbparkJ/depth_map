@@ -3,6 +3,7 @@
 
   const viewerCore = window.RoadConditionViewerCore;
   if (!viewerCore) throw new Error("viewer_core.js is required");
+  const runtimeConfig = window.ROAD_CONDITION_CONFIG || {};
 
   const state = {
     jobId: null,
@@ -20,7 +21,8 @@
     routeManifests: [],
     routeTiles: [],
     routeTileIndex: -1,
-    sourceMode: "job"
+    sourceMode: "job",
+    vworld: { map: null, viewer: null, dataSource: null, loading: null }
   };
 
   const $ = (id) => document.getElementById(id);
@@ -307,6 +309,9 @@
     const source = state.summary.source || {};
     const minimumCoverage = number(state.summary.parameters?.detection?.minimum_valid_coverage_ratio, 0.5);
     const coverageRatio = number(coverage.valid_coverage_ratio);
+    const supportedCoverageRatio = number(coverage.supported_coverage_ratio, coverageRatio);
+    const excludedCells = number(quality.plausibility_excluded_cell_count);
+    const excludedArea = number(coverage.plausibility_excluded_area_m2);
     const lowCoverage = coverageRatio < minimumCoverage;
     const manualReview = quality.manual_review_required === true;
     const roiFallback = quality.roi_applied === false;
@@ -314,6 +319,7 @@
     if (lowCoverage) reasons.push(`표면 커버리지 ${format(coverageRatio * 100, 1)}%로 내부 최소 기준 ${format(minimumCoverage * 100, 1)}% 미달`);
     if (manualReview) reasons.push(`카메라 보정 상태 ${quality.calibration_status || "unknown"} · 수동 검수 필수`);
     if (roiFallback) reasons.push("도로 ROI 없음 · trajectory corridor 임시 사용");
+    if (excludedCells > 0) reasons.push(`비현실 잔차 셀 ${excludedCells.toLocaleString("ko-KR")}개를 결함 판정에서 제외`);
     const ready = !lowCoverage && !manualReview;
     $("qualityBanner").className = `quality-banner ${ready ? "ready" : "hold"}`;
     $("qualityVerdict").textContent = ready ? "검수 가능한 결과" : "자동 판정 보류";
@@ -334,7 +340,11 @@
     $("maxPotholeDepth").textContent = verticalDistance(results.max_pothole_depth_m);
     $("maxRutDepth").textContent = verticalDistance(results.max_rut_depth_m);
     $("coverageRatio").textContent = `${format(coverageRatio * 100, 1)}%`;
-    $("coverageGuide").textContent = `내부 기준 ${format(minimumCoverage * 100, 0)}% ${lowCoverage ? "미달" : "이상"}`;
+    $("coverageGuide").textContent = `원시 지지 ${format(supportedCoverageRatio * 100, 1)}% · 내부 기준 ${format(minimumCoverage * 100, 0)}% ${lowCoverage ? "미달" : "이상"}`;
+    $("excludedSurface").textContent = excludedCells.toLocaleString("ko-KR");
+    $("excludedSurfaceGuide").textContent = excludedCells > 0
+      ? `${format(excludedArea, 2)} ㎡ · 낮음 ${number(quality.plausibility_excluded_low_cell_count)} / 높음 ${number(quality.plausibility_excluded_high_cell_count)}`
+      : "제외 셀 없음";
     $("coverageCard").classList.toggle("danger", lowCoverage);
     $("scoreCard").classList.toggle("muted-card", !ready);
     $("analyzedPoints").textContent = number(quality.analyzed_point_count).toLocaleString("ko-KR");
@@ -560,7 +570,7 @@
 
   function renderMap() {
     const { ctx, width, height } = prepareCanvas($("mapCanvas"));
-    const adapter = viewerCore.mapAdapterStatus($("mapAdapter").value);
+    const adapter = viewerCore.mapAdapterStatus($("mapAdapter").value, runtimeConfig, state.enuGeojson?.origin);
     $("adapterNotice").textContent = `${adapter.label}: ${adapter.message}`;
     const features = (state.enuGeojson?.features || []).filter((feature) => layerVisible(feature.properties));
     const points = features.flatMap((feature) => feature.geometry?.coordinates?.[0] || []);
@@ -592,21 +602,123 @@
     ctx.fillText(`${adapter.label} · local ENU metres · defect ID는 API와 동일`, 18, 24);
   }
 
+  async function ensureVWorldMap() {
+    if (state.vworld.viewer) return state.vworld.viewer;
+    if (state.vworld.loading) return state.vworld.loading;
+    const adapter = viewerCore.mapAdapterStatus("vworld", runtimeConfig, state.enuGeojson?.origin);
+    if (!adapter.ready) throw new Error(adapter.message);
+    state.vworld.loading = (async () => {
+      if (!window.vw) throw new Error("VWorld SDK runtime is unavailable");
+      if (String(window.vworldIsValid) !== "true") {
+        throw new Error(window.vworldErrMsg || "VWorld key/domain authentication failed");
+      }
+      const origin = state.enuGeojson.origin;
+      return new Promise((resolve, reject) => {
+        const timeout = window.setTimeout(() => reject(new Error("VWorld initialization timed out")), 18000);
+        window.vw.ws3dInitCallBack = () => {
+          window.clearTimeout(timeout);
+          try {
+            state.vworld.viewer = window.ws3d.viewer;
+            resolve(state.vworld.viewer);
+          } catch (error) {
+            reject(error);
+          }
+        };
+        try {
+          state.vworld.map = new window.vw.Map();
+          state.vworld.map.setOption({
+            mapId: "vworldMap",
+            initPosition: new window.vw.CameraPosition(
+              new window.vw.CoordZ(origin.longitude_deg, origin.latitude_deg, 350),
+              new window.vw.Direction(0, -75, 0)
+            ),
+            logo: true,
+            navigation: true
+          });
+          state.vworld.map.start();
+        } catch (error) {
+          window.clearTimeout(timeout);
+          reject(error);
+        }
+      });
+    })();
+    try {
+      return await state.vworld.loading;
+    } catch (error) {
+      state.vworld.loading = null;
+      throw error;
+    }
+  }
+
+  async function renderVWorld() {
+    const adapter = viewerCore.mapAdapterStatus("vworld", runtimeConfig, state.enuGeojson?.origin);
+    $("adapterNotice").textContent = `${adapter.label}: ${adapter.message}`;
+    if (!adapter.ready) {
+      $("vworldMap").hidden = true;
+      $("mapCanvas").hidden = false;
+      renderMap();
+      return;
+    }
+    try {
+      const viewer = await ensureVWorldMap();
+      if ($("viewMode").value !== "map" || $("mapAdapter").value !== "vworld") return;
+      const C = window.Cesium;
+      if (!C) throw new Error("VWorld Cesium runtime is unavailable");
+      if (!state.vworld.dataSource) {
+        state.vworld.dataSource = new C.CustomDataSource("road-condition-defects");
+        await viewer.dataSources.add(state.vworld.dataSource);
+      }
+      const entities = state.vworld.dataSource.entities;
+      entities.removeAll();
+      const wgs84 = viewerCore.enuFeatureCollectionToWgs84(state.enuGeojson);
+      for (const feature of wgs84.features || []) {
+        if (!layerVisible(feature.properties)) continue;
+        const ring = feature.geometry?.coordinates?.[0] || [];
+        if (ring.length < 3) continue;
+        const selected = feature.id === state.selectedDefect?.defect_id;
+        const degrees = ring.flatMap((point) => [point[0], point[1]]);
+        entities.add({
+          id: feature.id,
+          name: `${defectName(feature.properties.defect_type)} · ${feature.id}`,
+          polygon: {
+            hierarchy: C.Cartesian3.fromDegreesArray(degrees),
+            material: (selected ? C.Color.WHITE : C.Color.CYAN).withAlpha(selected ? 0.65 : 0.38),
+            outline: true,
+            outlineColor: selected ? C.Color.WHITE : C.Color.CYAN,
+            height: number(state.enuGeojson.origin?.ellipsoid_height_m)
+          }
+        });
+      }
+      if (entities.values.length) await viewer.flyTo(state.vworld.dataSource, { duration: 0.8 });
+      $("adapterNotice").textContent = `VWorld 연결됨 · EPSG:4326 변환 · 후보 ${entities.values.length}개 표시`;
+    } catch (error) {
+      $("vworldMap").hidden = true;
+      $("mapCanvas").hidden = false;
+      renderMap();
+      $("adapterNotice").textContent = `VWorld 실패: ${error.message} · local ENU fallback`;
+    }
+  }
+
   function renderCurrentView() {
     const mode = $("viewMode").value;
     $("surfaceCanvas").hidden = mode !== "plan";
     $("perspectiveCanvas").hidden = mode !== "perspective";
-    $("mapCanvas").hidden = mode !== "map";
+    const useVWorld = mode === "map" && $("mapAdapter").value === "vworld";
+    $("mapCanvas").hidden = mode !== "map" || useVWorld;
+    $("vworldMap").hidden = !useVWorld;
     $("mapAdapter").disabled = mode !== "map";
     $("adapterNotice").textContent = mode === "map" ? viewerCore.mapAdapterStatus($("mapAdapter").value).message : "";
     if (mode === "plan") renderSurface();
     else if (mode === "perspective") renderPerspective();
+    else if (useVWorld) renderVWorld();
     else renderMap();
     $("axisNote").textContent = mode === "plan"
       ? "가로: 진행거리 s(m) · 세로: 횡방향 t(m) · 색상: 기준면 대비 높이 잔차(cm) · 상단 색 띠: 구간 등급"
       : mode === "perspective"
         ? "잔차 preview grid의 경량 3D evidence · 전체 PLY를 브라우저로 보내지 않음"
-        : "Local ENU evidence adapter · VWorld/Cesium은 runtime key와 WGS84 설정 전 fallback";
+        : useVWorld
+          ? "VWorld basemap · local ENU 결함을 EPSG:4326으로 변환해 표시"
+          : "Local ENU evidence adapter · 외부 지도 실패 시 오프라인 fallback";
   }
 
   function pointInPolygon(point, polygon) {
@@ -852,6 +964,11 @@
     installContextRecovery(canvas);
   });
   window.addEventListener("resize", () => { if (state.surface) renderCurrentView(); });
+
+  const requestedView = new URLSearchParams(window.location.search).get("view");
+  const requestedAdapter = new URLSearchParams(window.location.search).get("adapter");
+  if (["plan", "perspective", "map"].includes(requestedView)) $("viewMode").value = requestedView;
+  if (["local_enu", "vworld", "cesium"].includes(requestedAdapter)) $("mapAdapter").value = requestedAdapter;
 
   boot();
 })();

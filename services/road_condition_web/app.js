@@ -26,6 +26,10 @@
   const $ = (id) => document.getElementById(id);
   const number = (value, fallback = 0) => Number.isFinite(Number(value)) ? Number(value) : fallback;
   const format = (value, digits = 1) => number(value).toLocaleString("ko-KR", { maximumFractionDigits: digits, minimumFractionDigits: digits });
+  const verticalDistance = (valueM) => {
+    const metres = number(valueM);
+    return Math.abs(metres) >= 1 ? `${format(metres, 2)} m` : `${format(metres * 100, 1)} cm`;
+  };
   const query = (values) => new URLSearchParams(values).toString();
   const api = async (path, options = {}) => {
     const response = await fetch(path, {
@@ -127,9 +131,9 @@
           corridor_half_width_m: number($("halfWidth").value, 3.5)
         },
         detection: {
-          pothole_min_depth_m: number($("potholeDepth").value, 0.035),
+          pothole_min_depth_m: number($("potholeDepth").value, 3.5) / 100,
           pothole_min_area_m2: number($("potholeArea").value, 0.035),
-          rut_min_depth_m: number($("rutDepth").value, 0.02),
+          rut_min_depth_m: number($("rutDepth").value, 2.0) / 100,
           segment_length_m: number($("segmentLength").value, 20)
         }
       }
@@ -300,23 +304,46 @@
     const scores = state.summary.scores || {};
     const coverage = state.summary.coverage || {};
     const quality = state.summary.quality || {};
+    const minimumCoverage = number(state.summary.parameters?.detection?.minimum_valid_coverage_ratio, 0.5);
+    const coverageRatio = number(coverage.valid_coverage_ratio);
+    const lowCoverage = coverageRatio < minimumCoverage;
+    const manualReview = quality.manual_review_required === true;
+    const roiFallback = quality.roi_applied === false;
+    const reasons = [];
+    if (lowCoverage) reasons.push(`표면 커버리지 ${format(coverageRatio * 100, 1)}%로 내부 최소 기준 ${format(minimumCoverage * 100, 1)}% 미달`);
+    if (manualReview) reasons.push(`카메라 보정 상태 ${quality.calibration_status || "unknown"} · 수동 검수 필수`);
+    if (roiFallback) reasons.push("도로 ROI 없음 · trajectory corridor 임시 사용");
+    const ready = !lowCoverage && !manualReview;
+    $("qualityBanner").className = `quality-banner ${ready ? "ready" : "hold"}`;
+    $("qualityVerdict").textContent = ready ? "검수 가능한 결과" : "자동 판정 보류";
+    $("qualityBadge").textContent = ready ? "검수 가능" : "재검토 필요";
+    $("qualityBadge").className = `status-pill ${ready ? "ok" : "error"}`;
+    $("qualityReasons").textContent = reasons.length
+      ? `${reasons.join(" · ")}. 아래 후보는 현장/RGB 대조 전까지 확정 결함이 아닙니다.`
+      : "기본 품질 기준을 통과했습니다. 후보별 현장 검수를 계속 진행하세요.";
     $("geometryScore").textContent = format(scores.geometry_score, 1);
-    $("geometryGrade").textContent = `${scores.grade || "-"} 등급`;
-    $("potholeCount").textContent = number(results.pothole_count).toLocaleString("ko-KR");
-    $("potholeArea").textContent = `총 ${format(results.pothole_area_m2, 2)} ㎡`;
-    $("maxPotholeDepth").textContent = `${format(number(results.max_pothole_depth_m) * 1000, 0)} mm`;
-    $("maxRutDepth").textContent = `${format(number(results.max_rut_depth_m) * 1000, 0)} mm`;
-    $("coverageRatio").textContent = `${format(number(coverage.valid_coverage_ratio) * 100, 1)}%`;
+    $("geometryGrade").textContent = `${ready ? "" : "판정 보류 · 참고 "}${scores.grade || "-"} 등급`;
+    $("defectCandidateCount").textContent = number(results.defect_count).toLocaleString("ko-KR");
+    $("candidateBreakdown").textContent = `포트홀 ${number(results.pothole_count)} · 러팅 ${number(results.rutting_count)} · 범프 ${number(results.bump_count)}`;
+    $("maxPotholeDepth").textContent = verticalDistance(results.max_pothole_depth_m);
+    $("maxRutDepth").textContent = verticalDistance(results.max_rut_depth_m);
+    $("coverageRatio").textContent = `${format(coverageRatio * 100, 1)}%`;
+    $("coverageGuide").textContent = `내부 기준 ${format(minimumCoverage * 100, 0)}% ${lowCoverage ? "미달" : "이상"}`;
+    $("coverageCard").classList.toggle("danger", lowCoverage);
+    $("scoreCard").classList.toggle("muted-card", !ready);
     $("analyzedPoints").textContent = number(quality.analyzed_point_count).toLocaleString("ko-KR");
+    $("samplingInfo").textContent = quality.point_sampling_applied
+      ? `원본 ${number(quality.original_point_count).toLocaleString("ko-KR")}점에서 표본 추출`
+      : "전체 입력 사용";
   }
 
   function defectPrimaryMetric(defect) {
     const m = defect.metrics || {};
-    if (defect.defect_type === "pothole") return `${format(number(m.max_depth_m) * 1000, 0)} mm · ${format(m.area_m2, 2)} ㎡`;
-    if (defect.defect_type === "rutting") return `${format(number(m.max_depth_m) * 1000, 0)} mm · ${format(m.length_m, 1)} m`;
-    if (defect.defect_type === "manhole_step_candidate" || defect.defect_type === "step_anomaly") return `${format(number(m.step_height_m) * 1000, 0)} mm · edge ${format(m.edge_length_m, 1)} m`;
-    if (defect.defect_type === "ponding_screening_proxy") return `${format(number(m.potential_retention_depth_m) * 1000, 0)} mm · ${format(m.potential_retention_area_m2, 2)} ㎡`;
-    return `${format(number(m.max_height_m) * 1000, 0)} mm · ${format(m.area_m2, 2)} ㎡`;
+    if (defect.defect_type === "pothole") return `${verticalDistance(m.max_depth_m)} · ${format(m.area_m2, 2)} ㎡`;
+    if (defect.defect_type === "rutting") return `${verticalDistance(m.max_depth_m)} · ${format(m.length_m, 1)} m`;
+    if (defect.defect_type === "manhole_step_candidate" || defect.defect_type === "step_anomaly") return `${verticalDistance(m.step_height_m)} · edge ${format(m.edge_length_m, 1)} m`;
+    if (defect.defect_type === "ponding_screening_proxy") return `${verticalDistance(m.potential_retention_depth_m)} · ${format(m.potential_retention_area_m2, 2)} ㎡`;
+    return `${verticalDistance(m.max_height_m)} · ${format(m.area_m2, 2)} ㎡`;
   }
 
   function defectName(type) {
@@ -349,7 +376,7 @@
     for (const segment of state.segments) {
       const rut = Math.max(number(segment.max_left_rut_depth_m), number(segment.max_right_rut_depth_m));
       const row = document.createElement("tr");
-      row.innerHTML = `<td>${format(segment.chainage_start_m, 0)}–${format(segment.chainage_end_m, 0)} m</td><td>${segment.lane_id || "전체"}</td><td>${format(number(segment.valid_coverage_ratio) * 100, 0)}%</td><td>${segment.pothole_count} / ${format(number(segment.max_pothole_depth_m) * 1000, 0)} mm</td><td>${format(rut * 1000, 0)} mm</td><td>${format(segment.geometry_score, 1)}</td><td>${segment.grade}</td>`;
+      row.innerHTML = `<td>${format(segment.chainage_start_m, 0)}–${format(segment.chainage_end_m, 0)} m</td><td>${segment.lane_id || "전체"}</td><td>${format(number(segment.valid_coverage_ratio) * 100, 0)}%</td><td>${segment.pothole_count} / ${verticalDistance(segment.max_pothole_depth_m)}</td><td>${verticalDistance(rut)}</td><td>${format(segment.geometry_score, 1)}</td><td>${segment.grade}</td>`;
       body.appendChild(row);
     }
   }
@@ -570,7 +597,7 @@
     else if (mode === "perspective") renderPerspective();
     else renderMap();
     $("axisNote").textContent = mode === "plan"
-      ? "가로: 진행거리 s · 세로: 횡방향 t · 상단 색 띠: 구간 등급"
+      ? "가로: 진행거리 s(m) · 세로: 횡방향 t(m) · 색상: 기준면 대비 높이 잔차(cm) · 상단 색 띠: 구간 등급"
       : mode === "perspective"
         ? "잔차 preview grid의 경량 3D evidence · 전체 PLY를 브라우저로 보내지 않음"
         : "Local ENU evidence adapter · VWorld/Cesium은 runtime key와 WGS84 설정 전 fallback";
@@ -611,7 +638,7 @@
     const defect = state.selectedDefect;
     if (!defect) {
       $("selectedBadge").textContent = "미선택";
-      $("defectDetail").innerHTML = '<span class="muted">지도 또는 아래 표에서 결함을 선택하세요.</span>';
+      $("defectDetail").innerHTML = '<span class="muted">지도 또는 아래 표에서 후보를 선택하세요.</span>';
       $("profileChart").innerHTML = "";
       $("longitudinalChart").innerHTML = "";
       $("reviewControls").hidden = true;
@@ -620,7 +647,7 @@
     $("selectedBadge").textContent = `${defectName(defect.defect_type)} · ${defect.severity}`;
     const flags = (defect.quality_flags || []).length ? defect.quality_flags.join(", ") : "없음";
     const review = state.reviews?.defects?.[defect.defect_id];
-    $("defectDetail").innerHTML = `<strong>${defect.defect_id}</strong><p>차로/구역 ${defect.lane_id || defect.road_zone || "unknown"} · 체인리지 ${format(defect.chainage_m, 2)} m · 횡방향 ${format(defect.lateral_offset_m, 2)} m</p><p>측정: ${defectPrimaryMetric(defect)} · 신뢰도 ${format(number(defect.confidence) * 100, 0)}%</p><p class="muted">품질 플래그: ${flags}</p><p class="muted">RGB evidence: N/A — 연결된 frame evidence 없음</p><p>검수: <strong>${review?.state || "N/A"}</strong>${review ? ` · version ${review.version}` : ""}</p>`;
+    $("defectDetail").innerHTML = `<strong>${defect.defect_id}</strong><p>차로/구역 ${defect.lane_id || defect.road_zone || "unknown"} · 체인리지 ${format(defect.chainage_m, 2)} m · 횡방향 ${format(defect.lateral_offset_m, 2)} m</p><p>측정: ${defectPrimaryMetric(defect)} · 후보 내부 신뢰도 ${format(number(defect.confidence) * 100, 0)}%</p><p class="muted">후보 신뢰도가 높아도 상단 데이터 판독 상태가 우선입니다.</p><p class="muted">품질 플래그: ${flags}</p><p class="muted">RGB evidence: N/A — 연결된 frame evidence 없음</p><p>검수: <strong>${review?.state || "N/A"}</strong>${review ? ` · version ${review.version}` : ""}</p>`;
     $("reviewControls").hidden = state.sourceMode !== "job" || !review;
     $("reviewSeverity").value = review?.current_annotation?.severity || defect.severity || "low";
     $("reviewStatus").textContent = review ? `raw prediction 보존 · 현재 version ${review.version}` : "";
@@ -669,10 +696,10 @@
     let best = Infinity;
     s.forEach((value, index) => { const distance = Math.abs(value - chainage); if (distance < best) { best = distance; rowIndex = index; } });
     const t = state.surface.t_values_m;
-    const residual = state.surface.residual_mm[rowIndex];
+    const residual = state.surface.residual_mm[rowIndex].map((value) => value === null ? null : value / 10);
     const width = 640, height = 220, margin = { left: 48, right: 14, top: 18, bottom: 34 };
     const finite = residual.filter((value) => value !== null && Number.isFinite(value));
-    const maxAbs = Math.max(40, ...finite.map((value) => Math.abs(value)));
+    const maxAbs = Math.max(4, ...finite.map((value) => Math.abs(value)));
     const xOf = (value) => margin.left + (value - t[0]) / Math.max(1e-9, t[t.length - 1] - t[0]) * (width - margin.left - margin.right);
     const yOf = (value) => margin.top + (maxAbs - value) / (2 * maxAbs) * (height - margin.top - margin.bottom);
     const ns = "http://www.w3.org/2000/svg";
@@ -684,16 +711,16 @@
     const line = document.createElementNS(ns, "polyline");
     line.setAttribute("points", points.join(" ")); line.setAttribute("fill", "none"); line.setAttribute("stroke", "#51d3df"); line.setAttribute("stroke-width", "2"); svg.appendChild(line);
     const label = document.createElementNS(ns, "text");
-    label.setAttribute("x", margin.left); label.setAttribute("y", height - 9); label.setAttribute("fill", "#91a9bd"); label.setAttribute("font-size", "11"); label.textContent = `횡단면 @ s=${format(s[rowIndex], 1)} m · residual mm`; svg.appendChild(label);
+    label.setAttribute("x", margin.left); label.setAttribute("y", height - 9); label.setAttribute("fill", "#91a9bd"); label.setAttribute("font-size", "11"); label.textContent = `횡단면 @ s=${format(s[rowIndex], 1)} m · 높이 잔차(cm)`; svg.appendChild(label);
 
     const longitudinalSvg = $("longitudinalChart");
     longitudinalSvg.innerHTML = "";
     let columnIndex = 0;
     let lateralBest = Infinity;
     t.forEach((value, index) => { const distance = Math.abs(value - lateralOffset); if (distance < lateralBest) { lateralBest = distance; columnIndex = index; } });
-    const longitudinal = state.surface.residual_mm.map((row) => row[columnIndex]);
+    const longitudinal = state.surface.residual_mm.map((row) => row[columnIndex] === null ? null : row[columnIndex] / 10);
     const longitudinalFinite = longitudinal.filter((value) => value !== null && Number.isFinite(value));
-    const longitudinalMax = Math.max(40, ...longitudinalFinite.map((value) => Math.abs(value)));
+    const longitudinalMax = Math.max(4, ...longitudinalFinite.map((value) => Math.abs(value)));
     const lx = (value) => margin.left + (value - s[0]) / Math.max(1e-9, s[s.length - 1] - s[0]) * (width - margin.left - margin.right);
     const ly = (value) => margin.top + (longitudinalMax - value) / (2 * longitudinalMax) * (height - margin.top - margin.bottom);
     const longAxis = document.createElementNS(ns, "path");
@@ -704,7 +731,7 @@
     const longLine = document.createElementNS(ns, "polyline");
     longLine.setAttribute("points", longitudinalPoints.join(" ")); longLine.setAttribute("fill", "none"); longLine.setAttribute("stroke", "#7ce3ae"); longLine.setAttribute("stroke-width", "2"); longitudinalSvg.appendChild(longLine);
     const longLabel = document.createElementNS(ns, "text");
-    longLabel.setAttribute("x", margin.left); longLabel.setAttribute("y", height - 9); longLabel.setAttribute("fill", "#91a9bd"); longLabel.setAttribute("font-size", "11"); longLabel.textContent = `종단면 @ t=${format(t[columnIndex], 1)} m · residual mm`; longitudinalSvg.appendChild(longLabel);
+    longLabel.setAttribute("x", margin.left); longLabel.setAttribute("y", height - 9); longLabel.setAttribute("fill", "#91a9bd"); longLabel.setAttribute("font-size", "11"); longLabel.textContent = `종단면 @ t=${format(t[columnIndex], 1)} m · 높이 잔차(cm)`; longitudinalSvg.appendChild(longLabel);
   }
 
   function cycleDefect(direction) {

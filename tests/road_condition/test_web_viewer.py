@@ -30,6 +30,10 @@ def test_web_viewer_has_progressive_route_and_accessibility_contract() -> None:
         "reviewReason",
         "submitReview",
         "maintenanceBudget",
+        "qualityBanner",
+        "qualityVerdict",
+        "qualityReasons",
+        "coverageGuide",
     ):
         assert f'id="{element_id}"' in html
     assert 'tabindex="0"' in html
@@ -43,6 +47,11 @@ def test_web_viewer_has_progressive_route_and_accessibility_contract() -> None:
     assert "raw prediction 보존" in script
     assert "/scenarios/v2" in script
     assert "전체 비용 N/A" in script
+    assert "자동 판정 보류" in script
+    assert "verticalDistance" in script
+    assert "높이 잔차(cm)" in script
+    assert 'number($("potholeDepth").value, 3.5) / 100' in script
+    assert 'number($("rutDepth").value, 2.0) / 100' in script
     assert "COPY services/road_condition_web/viewer_core.js" in dockerfile
 
 

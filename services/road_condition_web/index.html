@@ -58,9 +58,9 @@
         <div class="two-columns">
           <label>격자 크기(m)<input id="gridSize" type="number" min="0.03" max="0.50" step="0.01" value="0.10"></label>
           <label>도로 반폭(m)<input id="halfWidth" type="number" min="1.0" max="10" step="0.1" value="3.5"></label>
-          <label>포트홀 깊이(m)<input id="potholeDepth" type="number" min="0.01" max="0.30" step="0.005" value="0.035"></label>
+          <label>포트홀 깊이(cm)<input id="potholeDepth" type="number" min="1" max="30" step="0.5" value="3.5"></label>
           <label>포트홀 면적(㎡)<input id="potholeArea" type="number" min="0.005" max="5" step="0.005" value="0.035"></label>
-          <label>러팅 깊이(m)<input id="rutDepth" type="number" min="0.005" max="0.20" step="0.005" value="0.020"></label>
+          <label>러팅 깊이(cm)<input id="rutDepth" type="number" min="0.5" max="20" step="0.5" value="2.0"></label>
           <label>구간 길이(m)<input id="segmentLength" type="number" min="5" max="100" step="5" value="20"></label>
         </div>
         <button id="runButton" class="button primary full">새 분석 실행</button>
@@ -129,18 +129,31 @@
 
       <div id="resultView" hidden>
         <div id="renderRecovery" class="notice recovery" hidden role="alert"><strong>렌더링 컨텍스트가 중단되었습니다.</strong><button id="reloadViewer" class="button ghost">뷰어 새로고침</button></div>
+        <section id="qualityBanner" class="quality-banner" role="status" aria-live="polite">
+          <div class="quality-heading">
+            <div><span class="eyebrow">DATA READINESS</span><strong id="qualityVerdict">판독 상태 확인 중</strong></div>
+            <span id="qualityBadge" class="status-pill pending">확인 중</span>
+          </div>
+          <p id="qualityReasons">결과 품질 정보를 불러오고 있습니다.</p>
+          <ol class="reading-guide">
+            <li><strong>판독 상태·커버리지</strong><span>분석 가능한 도로면 비율을 먼저 확인</span></li>
+            <li><strong>결함 후보 위치</strong><span>빈 영역과 도로 가장자리 후보를 구분</span></li>
+            <li><strong>측정값·단면</strong><span>깊이/높이와 횡·종단면을 함께 확인</span></li>
+            <li><strong>현장 검수</strong><span>RGB/실측 대조 후 승인·거절·재수집 기록</span></li>
+          </ol>
+        </section>
         <section class="summary-grid">
-          <article><span>형상 점수</span><strong id="geometryScore">-</strong><em id="geometryGrade">-</em></article>
-          <article><span>포트홀</span><strong id="potholeCount">-</strong><small id="potholeArea">-</small></article>
-          <article><span>최대 포트홀</span><strong id="maxPotholeDepth">-</strong></article>
-          <article><span>최대 러팅</span><strong id="maxRutDepth">-</strong></article>
-          <article><span>표면 커버리지</span><strong id="coverageRatio">-</strong></article>
-          <article><span>분석 포인트</span><strong id="analyzedPoints">-</strong></article>
+          <article id="scoreCard"><span>내부 형상 점수(참고)</span><strong id="geometryScore">-</strong><em id="geometryGrade">-</em></article>
+          <article><span>검출 후보</span><strong id="defectCandidateCount">-</strong><small id="candidateBreakdown">-</small></article>
+          <article><span>최대 포트홀 깊이</span><strong id="maxPotholeDepth">-</strong></article>
+          <article><span>최대 러팅 깊이</span><strong id="maxRutDepth">-</strong></article>
+          <article id="coverageCard"><span>표면 커버리지</span><strong id="coverageRatio">-</strong><small id="coverageGuide">-</small></article>
+          <article><span>분석 포인트</span><strong id="analyzedPoints">-</strong><small id="samplingInfo">-</small></article>
         </section>
 
         <section class="panel visualization-panel">
           <div class="section-heading">
-            <div><span class="eyebrow">LOCAL ROAD COORDINATE</span><h2>도로면 잔차 및 결함</h2></div>
+            <div><span class="eyebrow">LOCAL ROAD COORDINATE</span><h2>도로면 잔차 및 결함 후보</h2></div>
             <div class="legend">
               <span><i class="legend-swatch depression"></i>함몰</span>
               <span><i class="legend-swatch neutral"></i>기준면</span>
@@ -163,8 +176,8 @@
 
         <div class="detail-grid">
           <section class="panel">
-            <div class="section-heading"><h2>선택 결함</h2><span id="selectedBadge" class="status-pill">미선택</span></div>
-            <div id="defectDetail" class="muted">지도 또는 아래 표에서 결함을 선택하세요.</div>
+            <div class="section-heading"><h2>선택 후보</h2><span id="selectedBadge" class="status-pill">미선택</span></div>
+            <div id="defectDetail" class="muted">지도 또는 아래 표에서 후보를 선택하세요.</div>
             <div id="reviewControls" class="review-controls" hidden>
               <p class="help">수동 검수 · actor는 현재 인증 계정이 아닌 audit label입니다.</p>
               <label>검수자<input id="reviewActor" type="text" maxlength="128" value="local-reviewer"></label>
@@ -186,8 +199,8 @@
         </div>
 
         <section class="panel">
-          <div class="section-heading"><h2>검출 결함 목록</h2><span id="defectCountLabel" class="muted"></span></div>
-          <div class="table-scroll"><table id="defectTable"><thead><tr><th>ID</th><th>종류</th><th>차로/구역</th><th>체인리지</th><th>심각도</th><th>주요 측정값</th><th>신뢰도</th><th>검수</th></tr></thead><tbody></tbody></table></div>
+          <div class="section-heading"><h2>검출 후보 목록</h2><span id="defectCountLabel" class="muted"></span></div>
+          <div class="table-scroll"><table id="defectTable"><thead><tr><th>ID</th><th>종류</th><th>차로/구역</th><th>체인리지</th><th>심각도</th><th>주요 측정값</th><th>후보 신뢰도</th><th>검수</th></tr></thead><tbody></tbody></table></div>
         </section>
 
         <section class="panel">

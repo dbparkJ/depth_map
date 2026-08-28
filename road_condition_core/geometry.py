@@ -275,15 +275,27 @@ def rasterize_road_surface(
                 local_spread = max(local_spread, float(np.median(metadata_values)))
         spread[cell_s, cell_t] = local_spread
 
-    valid = np.isfinite(observed) & (counts >= config.min_points_per_cell)
-    if np.count_nonzero(valid) < config.reference_min_cells:
+    supported = np.isfinite(observed) & (counts >= config.min_points_per_cell)
+    if np.count_nonzero(supported) < config.reference_min_cells:
         raise ValueError(
             "road surface has too few supported grid cells; use a coarser grid or "
             "collect denser observations"
         )
-    reference = fit_reference_surface(s_values, t_values, observed, valid, config)
+    reference = fit_reference_surface(s_values, t_values, observed, supported, config)
     residual = observed.astype(np.float64) - reference
-    residual[~valid] = np.nan
+    residual[~supported] = np.nan
+    excluded_low = supported & (
+        residual < config.plausibility_residual_min_m
+    )
+    excluded_high = supported & (
+        residual > config.plausibility_residual_max_m
+    )
+    valid = supported & ~excluded_low & ~excluded_high
+    if np.count_nonzero(valid) < config.reference_min_cells:
+        raise ValueError(
+            "road surface has too few plausible grid cells after residual gating; "
+            "verify trajectory, calibration, ROI, and plausibility thresholds"
+        )
     return SurfaceGrid(
         s_values_m=s_values.astype(np.float32),
         t_values_m=t_values.astype(np.float32),
@@ -296,6 +308,9 @@ def rasterize_road_surface(
         trajectory_enu_m=np.asarray(trajectory_enu_m, dtype=np.float64),
         trajectory_cumulative_m=coordinates.trajectory_cumulative_m,
         source_origin=source_origin,
+        supported_mask=supported,
+        plausibility_excluded_low_mask=excluded_low,
+        plausibility_excluded_high_mask=excluded_high,
     )
 
 

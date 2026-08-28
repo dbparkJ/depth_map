@@ -22,6 +22,11 @@ class SurfaceConfig:
     reference_robust_iterations: int = 4
     reference_mad_sigma: float = 2.8
     reference_min_residual_gate_m: float = 0.025
+    # Experimental geometry plausibility guard applied after the robust reference
+    # surface fit. It rejects non-road cells from detectors without deleting raw
+    # points or changing the mapping bundle.
+    plausibility_residual_min_m: float = -0.30
+    plausibility_residual_max_m: float = 0.25
     max_input_points: int = 2_000_000
     preview_max_along_cells: int = 420
     preview_max_cross_cells: int = 140
@@ -50,6 +55,12 @@ class SurfaceConfig:
             raise ValueError("reference_min_cells must be at least 6")
         if self.reference_robust_iterations < 1:
             raise ValueError("reference_robust_iterations must be at least 1")
+        if not self.plausibility_residual_min_m < 0.0:
+            raise ValueError("plausibility_residual_min_m must be negative")
+        if not self.plausibility_residual_max_m > 0.0:
+            raise ValueError("plausibility_residual_max_m must be positive")
+        if self.plausibility_residual_min_m >= self.plausibility_residual_max_m:
+            raise ValueError("plausibility residual range is invalid")
         if self.max_input_points < 10_000:
             raise ValueError("max_input_points must be at least 10,000")
 

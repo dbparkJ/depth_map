@@ -458,6 +458,21 @@ def analyze_points(
             grid,
             valid_mask=grid.valid_mask & included_grid,
             residual_m=np.where(included_grid, grid.residual_m, np.nan).astype(np.float32),
+            supported_mask=(
+                grid.supported_mask & included_grid
+                if grid.supported_mask is not None
+                else grid.valid_mask & included_grid
+            ),
+            plausibility_excluded_low_mask=(
+                grid.plausibility_excluded_low_mask & included_grid
+                if grid.plausibility_excluded_low_mask is not None
+                else None
+            ),
+            plausibility_excluded_high_mask=(
+                grid.plausibility_excluded_high_mask & included_grid
+                if grid.plausibility_excluded_high_mask is not None
+                else None
+            ),
             roi_zone_code=zone_code,
             roi_lane_index=lane_index,
             roi_lane_ids=lane_ids,
@@ -552,6 +567,21 @@ def analyze_points(
     )
     valid_cells = int(np.count_nonzero(grid.valid_mask))
     total_cells = int(grid.valid_mask.size)
+    supported_mask = (
+        grid.supported_mask if grid.supported_mask is not None else grid.valid_mask
+    )
+    supported_cells = int(np.count_nonzero(supported_mask))
+    excluded_low_cells = int(
+        np.count_nonzero(grid.plausibility_excluded_low_mask)
+        if grid.plausibility_excluded_low_mask is not None
+        else 0
+    )
+    excluded_high_cells = int(
+        np.count_nonzero(grid.plausibility_excluded_high_mask)
+        if grid.plausibility_excluded_high_mask is not None
+        else 0
+    )
+    excluded_cells = excluded_low_cells + excluded_high_cells
     valid_area = valid_cells * grid.cell_area_m2
     max_rut = max(
         max((item.metrics.get("max_depth_m", 0.0) for item in ruts), default=0.0),
@@ -598,7 +628,11 @@ def analyze_points(
             "original_point_count": int(original_count),
             "analyzed_point_count": int(len(points)),
             "point_sampling_applied": bool(original_count != sampled_count_before_roi),
-            "supported_surface_cell_count": valid_cells,
+            "supported_surface_cell_count": supported_cells,
+            "usable_surface_cell_count": valid_cells,
+            "plausibility_excluded_cell_count": excluded_cells,
+            "plausibility_excluded_low_cell_count": excluded_low_cells,
+            "plausibility_excluded_high_cell_count": excluded_high_cells,
             "total_surface_cell_count": total_cells,
             "median_points_per_valid_cell": float(
                 np.median(grid.point_count[grid.valid_mask])
@@ -615,7 +649,16 @@ def analyze_points(
             "chainage_end_m": float(grid.s_values_m[-1]),
             "corridor_half_width_m": resolved_config.surface.corridor_half_width_m,
             "valid_coverage_ratio": float(coverage_ratio),
+            "supported_coverage_ratio": float(
+                supported_cells / total_cells if total_cells else 0.0
+            ),
             "valid_surface_area_m2": float(valid_area),
+            "plausibility_excluded_area_m2": float(
+                excluded_cells * grid.cell_area_m2
+            ),
+            "plausibility_excluded_supported_ratio": float(
+                excluded_cells / supported_cells if supported_cells else 0.0
+            ),
             "grid_size_m": resolved_config.surface.grid_size_m,
         },
         "results": {
@@ -665,6 +708,7 @@ def analyze_points(
             "The score is an internal planning score and must not be reported as certified PCI.",
             "Thresholds must be calibrated with surveyed potholes, rut depths, and a flat-road noise holdout.",
             "Low coverage or pose/depth uncertainty requires manual review or recollection.",
+            "The residual plausibility gate is an experimental non-road-cell guard, not a surveyed acceptance threshold.",
         ],
     }
     if (source or {}).get("type") == "mapping_bundle" and not bool(
@@ -832,6 +876,21 @@ def write_analysis_products(output_dir: str | Path, products: AnalysisProducts) 
         point_count=products.surface.point_count,
         position_std_m=products.surface.position_std_m,
         valid_mask=products.surface.valid_mask,
+        supported_mask=(
+            products.surface.supported_mask
+            if products.surface.supported_mask is not None
+            else products.surface.valid_mask
+        ),
+        plausibility_excluded_low_mask=(
+            products.surface.plausibility_excluded_low_mask
+            if products.surface.plausibility_excluded_low_mask is not None
+            else np.zeros_like(products.surface.valid_mask)
+        ),
+        plausibility_excluded_high_mask=(
+            products.surface.plausibility_excluded_high_mask
+            if products.surface.plausibility_excluded_high_mask is not None
+            else np.zeros_like(products.surface.valid_mask)
+        ),
         roi_zone_code=(
             products.surface.roi_zone_code
             if products.surface.roi_zone_code is not None

@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 
+import pytest
+
 from road_condition_core.config import AnalysisConfig
 from road_condition_core.pipeline import analyze_points, write_analysis_products
 from road_condition_core.synthetic import generate_synthetic_scene
@@ -110,3 +112,59 @@ def test_unknown_config_key_is_rejected() -> None:
         assert "unknown surface config keys" in str(exc)
     else:
         raise AssertionError("unknown config key was accepted")
+
+
+def test_implausible_surface_cells_are_excluded_and_accounted() -> None:
+    scene = generate_synthetic_scene(
+        "flat",
+        length_m=24.0,
+        resolution_m=0.15,
+        observations_per_cell=4,
+        seed=23,
+    )
+    points = scene.points_enu_m.copy()
+    high = (
+        (points[:, 0] >= 8.0)
+        & (points[:, 0] < 9.0)
+        & (points[:, 1] >= 0.4)
+        & (points[:, 1] < 1.4)
+    )
+    low = (
+        (points[:, 0] >= 15.0)
+        & (points[:, 0] < 16.0)
+        & (points[:, 1] >= -1.4)
+        & (points[:, 1] < -0.4)
+    )
+    points[high, 2] += 0.65
+    points[low, 2] -= 0.65
+
+    products = analyze_points(
+        points,
+        scene.colors_rgb,
+        scene.trajectory_enu_m,
+        config=AnalysisConfig.from_overrides(
+            {"surface": {"grid_size_m": 0.15, "reference_min_cells": 80}}
+        ),
+        source={"type": "synthetic", "profile": "flat_with_nonroad_cells"},
+    )
+
+    quality = products.summary["quality"]
+    coverage = products.summary["coverage"]
+    assert quality["plausibility_excluded_high_cell_count"] > 0
+    assert quality["plausibility_excluded_low_cell_count"] > 0
+    assert quality["supported_surface_cell_count"] == (
+        quality["usable_surface_cell_count"]
+        + quality["plausibility_excluded_cell_count"]
+    )
+    assert coverage["supported_coverage_ratio"] > coverage["valid_coverage_ratio"]
+    assert products.summary["results"]["max_bump_height_m"] < 0.25
+    assert products.summary["results"]["max_pothole_depth_m"] < 0.30
+
+
+@pytest.mark.parametrize(
+    ("name", "value"),
+    (("plausibility_residual_min_m", 0.0), ("plausibility_residual_max_m", 0.0)),
+)
+def test_plausibility_residual_range_is_validated(name: str, value: float) -> None:
+    with pytest.raises(ValueError, match=name):
+        AnalysisConfig.from_overrides({"surface": {name: value}})

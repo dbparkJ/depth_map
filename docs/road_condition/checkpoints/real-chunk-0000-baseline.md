@@ -56,5 +56,6 @@ job 디렉터리 하나만 exact path로 삭제했다. 삭제한 runtime job 결
 - 포트홀 음수 residual을 high-point 제거 명목으로 삭제하지 않는다.
 - 합성 포트홀/러팅/범프 회귀를 유지한다.
 - 비현실 높이 후보는 defect가 아니라 excluded surface cell로 회계한다.
-- `chunk_0000` route tile coverage가 기존보다 낮아지면 중단한다.
+- `chunk_0000` route tile의 원시 지지 coverage가 기존보다 낮아지면 중단한다. 분석 가능
+  coverage는 제외 셀 수·면적과 정확히 대응하는 경우에만 낮아질 수 있다.
 - ground truth가 없으므로 후보 수 감소를 정확도 향상 또는 승인으로 간주하지 않는다.

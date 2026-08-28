@@ -22,6 +22,9 @@ class SurfaceGrid:
     roi_zone_code: np.ndarray | None = None
     roi_lane_index: np.ndarray | None = None
     roi_lane_ids: tuple[str, ...] = ()
+    supported_mask: np.ndarray | None = None
+    plausibility_excluded_low_mask: np.ndarray | None = None
+    plausibility_excluded_high_mask: np.ndarray | None = None
 
     @property
     def cell_area_m2(self) -> float:

@@ -163,11 +163,17 @@ record
 
 ### Checkpoint E — 통합 검증과 외부 공개
 
+상태: **구현·실데이터·Compose·Cloudflare 통합 검증 완료**
+
 - static/unit/synthetic/real smoke/Compose
 - Cloudflare HTTPS에서 실제 route evidence와 VWorld WebGL 확인
 - GET-only 공개 경계 재검증
 - 성능: evidence byte, download, parse, first-visible 측정
 - commit: `test(road-condition): checkpoint/road-condition-official-3d-evidence`
+
+통합 결과와 측정 환경은
+[`official-3d-evidence-integration.md`](official-3d-evidence-integration.md)에 기록한다. Quick
+Tunnel 주소와 단일 브라우저 시간은 영구 운영 주소나 SLA로 해석하지 않는다.
 
 ## 명칭과 UX 원칙
 

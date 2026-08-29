@@ -70,6 +70,10 @@ AI-agent는 작업을 시작할 때 다음 순서로 읽는다.
 - 내부 geometry score와 roughness proxy
 - FastAPI 파일 기반 단일 worker와 read-only workspace
 - residual heatmap, 결함 overlay, 횡단 profile, 유지보수 비용 시나리오 웹
+- 실제 `chunk_0000` route tile의 경량 RGB point evidence와 손상 후보 mask
+- VWorld 실제 높이 표시, Local ENU fallback, 행정 담당자용 `어디/무엇/조치` 첫 화면
+- 국내외 연구 근거 version 추적과 2026 공식 공종 부분합 예산 검토
+- 26개 청크 균등 감사와 높은 비노면 물체 경계 범프 억제 guard
 
 공식 PCI, 표준 IRI, 실제 배수망 침수예측, 크랙 AI와 전체 노선 청크 stitching은 완료로
 표시하지 않는다.

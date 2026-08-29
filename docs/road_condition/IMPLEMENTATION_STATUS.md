@@ -1,6 +1,6 @@
 # 도로 상태 분석 플랫폼 구현 상태
 
-기준 브랜치: `feat/road-condition-platform-mvp`
+기준 브랜치: `feat/road-condition-official-3d-evidence`
 
 ## 1. 완료
 
@@ -54,6 +54,7 @@
 - [x] 단일 host background worker
 - [x] 파일 기반 job 상태
 - [x] 결과 조회
+- [x] 완료 route의 선택 tile·RCEV evidence·2026 예산 검토 read-only GET
 - [x] HTML report 조회
 - [x] 유지보수 비용·강우 screening endpoint
 - [x] 완료/실패 작업 삭제
@@ -70,6 +71,8 @@
 - [x] 결함 선택과 횡단 profile
 - [x] 구간 표
 - [x] 유지보수 시나리오
+- [x] VWorld 위 실제 RGB point·손상 mask와 Local ENU fallback
+- [x] 행정 담당자용 위치·관찰·조치 요약과 cm/m 표시
 - [x] HTML report 링크
 
 ### Docker와 테스트
@@ -84,6 +87,7 @@
 - [x] Python compile 검사
 - [x] JavaScript syntax 검사
 - [x] Compose YAML parse 검사
+- [x] Cloudflare GET-only 공개 경계와 실제 VWorld WebGL smoke
 
 ## 2. 부분 완료 또는 실험 상태
 

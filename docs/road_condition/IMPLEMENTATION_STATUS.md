@@ -139,11 +139,11 @@ ground truth가 아직 `unknown`이다. 따라서 실험 threshold는 자동 승
 
 ### P1: UI와 리포트
 
-- [~] local ENU 지도와 VWorld/Cesium adapter 경계; 외부 key/token·WGS84 설정 전 fallback
+- [x] VWorld 실제 지도와 선택 tile의 RGB point/mask, actual Z 기반 WGS84 변환, Local ENU fallback
 - [x] route manifest + 선택 tile JSON 점진 로드, 전체 PLY 브라우저 전송 금지
-- [x] 경량 3D evidence와 1×/2×/5× Z 강조
+- [x] RCEV 경량 실제 point evidence와 1×/2×/5× 분석 표면 Z 강조
 - [x] segment grade/low coverage/confidence/quality layer
-- [ ] 위경도 defect GeoJSON
+- [~] 웹에서 ENU defect를 WGS84로 변환; 영구 위경도 GeoJSON 산출물은 미구현
 - [~] RGB evidence N/A 표시; 실제 frame 연결은 후속
 - [x] 선택 결함 횡·종단 residual profile
 - [x] low-confidence/recollection filter

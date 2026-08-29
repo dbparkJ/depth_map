@@ -26,7 +26,8 @@
           tileId: tile.tile_id,
           state: tile.state,
           coreStartM: Number(tile.core_start_m),
-          coreEndM: Number(tile.core_end_m)
+          coreEndM: Number(tile.core_end_m),
+          evidence: tile.evidence || null
         });
       }
     }
@@ -127,7 +128,7 @@
       geometry: {
         ...feature.geometry,
         coordinates: (feature.geometry?.coordinates || []).map((ring) =>
-          ring.map((point) => enuToWgs84(point, source.origin).slice(0, 2))
+          ring.map((point) => enuToWgs84(point, source.origin))
         )
       }
     }));
@@ -146,5 +147,83 @@
     return [x, y];
   }
 
-  return { parseRoutePaths, buildTileSequence, defectVisible, mapAdapterStatus, enuToWgs84, enuFeatureCollectionToWgs84, perspectivePoint };
+  function parseRcev(payload) {
+    let buffer;
+    let byteOffset = 0;
+    let byteLength;
+    if (payload instanceof ArrayBuffer) {
+      buffer = payload;
+      byteLength = payload.byteLength;
+    } else if (ArrayBuffer.isView(payload)) {
+      buffer = payload.buffer;
+      byteOffset = payload.byteOffset;
+      byteLength = payload.byteLength;
+    } else {
+      throw new Error("RCEV payload must be an ArrayBuffer");
+    }
+    if (byteLength < 64) throw new Error("RCEV header is incomplete");
+    const view = new DataView(buffer, byteOffset, byteLength);
+    const magic = String.fromCharCode(
+      view.getUint8(0), view.getUint8(1), view.getUint8(2), view.getUint8(3)
+    );
+    const version = view.getUint32(4, true);
+    const count = view.getUint32(8, true);
+    const stride = view.getUint32(12, true);
+    if (magic !== "RCEV" || version !== 1 || stride !== 12) {
+      throw new Error("unsupported RCEV evidence tile");
+    }
+    if (count > 60000) throw new Error("RCEV point count exceeds browser tile limit");
+    if (64 + count * stride !== byteLength) throw new Error("RCEV payload size mismatch");
+    const bboxMin = [16, 20, 24].map((offset) => view.getFloat32(offset, true));
+    const quantizationScale = [28, 32, 36].map((offset) => view.getFloat32(offset, true));
+    if (![...bboxMin, ...quantizationScale].every(Number.isFinite)) {
+      throw new Error("RCEV header contains non-finite coordinates");
+    }
+    const positions = new Float32Array(count * 3);
+    const colors = new Uint8Array(count * 3);
+    const defectClasses = new Uint8Array(count);
+    const defectIndices = new Uint16Array(count);
+    for (let index = 0; index < count; index += 1) {
+      const offset = 64 + index * stride;
+      for (let axis = 0; axis < 3; axis += 1) {
+        positions[index * 3 + axis] = bboxMin[axis]
+          + view.getUint16(offset + axis * 2, true) * quantizationScale[axis];
+        colors[index * 3 + axis] = view.getUint8(offset + 6 + axis);
+      }
+      defectClasses[index] = view.getUint8(offset + 9);
+      defectIndices[index] = view.getUint16(offset + 10, true);
+    }
+    return {
+      format: "RCEV",
+      version,
+      count,
+      stride,
+      bboxMin,
+      quantizationScale,
+      positions,
+      colors,
+      defectClasses,
+      defectIndices
+    };
+  }
+
+  function evidenceDefectId(tileMetadata, defectIndex) {
+    if (Number(defectIndex) === 65535) return null;
+    const match = (tileMetadata?.defects || []).find(
+      (item) => Number(item.index) === Number(defectIndex)
+    );
+    return match?.defect_id || null;
+  }
+
+  return {
+    parseRoutePaths,
+    buildTileSequence,
+    defectVisible,
+    mapAdapterStatus,
+    enuToWgs84,
+    enuFeatureCollectionToWgs84,
+    perspectivePoint,
+    parseRcev,
+    evidenceDefectId
+  };
 });

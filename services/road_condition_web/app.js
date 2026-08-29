@@ -20,10 +20,23 @@
     canvasGeometry: null,
     completedJobs: [],
     routeManifests: [],
+    evidenceManifests: {},
     routeTiles: [],
     routeTileIndex: -1,
+    evidence: null,
+    evidenceTile: null,
     sourceMode: "job",
-    vworld: { map: null, viewer: null, dataSource: null, loading: null }
+    vworld: {
+      map: null,
+      viewer: null,
+      dataSource: null,
+      pointCollection: null,
+      loading: null,
+      renderToken: 0,
+      renderedTileKey: null,
+      selectedDefectId: null,
+      selectionListenerInstalled: false
+    }
   };
 
   const $ = (id) => document.getElementById(id);
@@ -47,6 +60,26 @@
     if (response.status === 204) return null;
     return response.json();
   };
+  const apiBinary = async (path) => {
+    const response = await fetch(path, {
+      headers: { Accept: "application/vnd.road-condition.rcev" }
+    });
+    if (!response.ok) {
+      let detail = `${response.status} ${response.statusText}`;
+      try { detail = (await response.json()).detail || detail; } catch (_) { /* no-op */ }
+      throw new Error(detail);
+    }
+    return response.arrayBuffer();
+  };
+
+  function leadDefect(defects) {
+    const severity = { high: 3, medium: 2, low: 1 };
+    return [...(defects || [])].sort((left, right) =>
+      number(severity[right.severity]) - number(severity[left.severity])
+      || number(right.confidence) - number(left.confidence)
+      || number(left.chainage_m) - number(right.chainage_m)
+    )[0] || null;
+  }
 
   function setApiStatus(text, kind) {
     const element = $("apiStatus");
@@ -217,13 +250,25 @@
       api(`/api/v1/jobs/${jobId}/segments`),
       api(`/api/v1/jobs/${jobId}/reviews`)
     ]);
-    Object.assign(state, { summary, surface, defects, geojson, enuGeojson, segments, reviews, selectedDefect: null });
+    Object.assign(state, {
+      summary,
+      surface,
+      defects,
+      geojson,
+      enuGeojson,
+      segments,
+      reviews,
+      selectedDefect: leadDefect(defects),
+      evidence: null,
+      evidenceTile: null
+    });
     $("emptyState").hidden = true;
     $("resultView").hidden = false;
     $("scenarioButton").disabled = false;
     $("reportLink").classList.remove("disabled");
     $("reportLink").href = `/api/v1/jobs/${jobId}/report`;
     $("loadedTileLabel").textContent = `job ${jobId.slice(0, 8)}`;
+    $("evidenceStatus").textContent = "경량 현장 점군 없음 · 분석 표면과 후보 경계로 표시";
     $("jobProgress").hidden = true;
     renderSummary();
     renderDefectTable();
@@ -242,7 +287,21 @@
       const manifests = await Promise.all(paths.map((path) =>
         api(`/api/v1/route-datasets/manifest?${query({ path })}`)
       ));
+      const evidenceEntries = await Promise.all(manifests.map(async (manifest) => {
+        if (!manifest.viewer_contract?.point_evidence?.available) {
+          return [manifest.workspace_relative_path, null];
+        }
+        try {
+          const evidenceManifest = await api(
+            `/api/v1/route-datasets/evidence/manifest?${query({ path: manifest.workspace_relative_path })}`
+          );
+          return [manifest.workspace_relative_path, evidenceManifest];
+        } catch (_) {
+          return [manifest.workspace_relative_path, null];
+        }
+      }));
       state.routeManifests = manifests;
+      state.evidenceManifests = Object.fromEntries(evidenceEntries);
       state.routeTiles = viewerCore.buildTileSequence(manifests);
       state.sourceMode = "route";
       state.jobId = null;
@@ -257,7 +316,8 @@
       });
       selector.disabled = !state.routeTiles.length;
       const completed = state.routeTiles.filter((tile) => tile.state === "completed").length;
-      $("routeStatus").innerHTML = `<strong>${paths.length}개 청크 · ${state.routeTiles.length}개 타일</strong><p>완료 ${completed} · 실패/미완료 ${state.routeTiles.length - completed}</p><p class="muted">선택 tile JSON만 로드 · 전체 PLY 미전송</p>`;
+      const evidenceCount = state.routeTiles.filter((tile) => tile.evidence?.state === "completed").length;
+      $("routeStatus").innerHTML = `<strong>${paths.length}개 청크 · ${state.routeTiles.length}개 타일</strong><p>완료 ${completed} · 실패/미완료 ${state.routeTiles.length - completed}</p><p class="muted">경량 현장 점군 ${evidenceCount}개 타일 · 선택 타일만 전송 · 전체 PLY 미전송</p>`;
       const firstCompleted = state.routeTiles.findIndex((tile) => tile.state === "completed");
       if (firstCompleted < 0) throw new Error("열 수 있는 완료 tile이 없습니다.");
       await loadRouteTile(firstCompleted);
@@ -283,17 +343,43 @@
     setApiStatus(`${tile.tileId} 로딩 중`, "pending");
     const endpoint = "/api/v1/route-datasets/tile";
     const artifact = (name) => api(`${endpoint}?${query({ path: tile.path, tile_id: tile.tileId, artifact: name })}`);
-    const [summary, surface, defects, geojson, enuGeojson, segments] = await Promise.all([
+    const evidenceManifest = state.evidenceManifests[tile.path];
+    const evidenceTile = (evidenceManifest?.tiles || []).find((item) => item.tile_id === tile.tileId) || null;
+    const evidenceRequest = evidenceTile?.state === "completed"
+      ? apiBinary(`/api/v1/route-datasets/evidence/tile?${query({ path: tile.path, tile_id: tile.tileId })}`)
+        .then((payload) => viewerCore.parseRcev(payload))
+        .catch((error) => ({ error: error.message }))
+      : Promise.resolve(null);
+    const [summary, surface, defects, geojson, enuGeojson, segments, evidence] = await Promise.all([
       artifact("summary"), artifact("surface"), artifact("defects"),
-      artifact("defects_local_geojson"), artifact("defects_enu_geojson"), artifact("segments")
+      artifact("defects_local_geojson"), artifact("defects_enu_geojson"), artifact("segments"),
+      evidenceRequest
     ]);
-    Object.assign(state, { summary, surface, defects, geojson, enuGeojson, segments, reviews: null, selectedDefect: null });
+    Object.assign(state, {
+      summary,
+      surface,
+      defects,
+      geojson,
+      enuGeojson,
+      segments,
+      reviews: null,
+      selectedDefect: leadDefect(defects),
+      evidence: evidence?.error ? null : evidence,
+      evidenceTile
+    });
+    state.vworld.renderedTileKey = null;
+    state.vworld.selectedDefectId = null;
     $("emptyState").hidden = true;
     $("resultView").hidden = false;
     $("scenarioButton").disabled = true;
     $("reportLink").classList.add("disabled");
     $("reportLink").href = "#";
     $("loadedTileLabel").textContent = `${index + 1}/${state.routeTiles.length} · ${tile.tileId}`;
+    $("evidenceStatus").textContent = evidence?.error
+      ? `현장 점군 로딩 실패: ${evidence.error}`
+      : evidence
+        ? `실제 수집 포인트 ${evidence.count.toLocaleString("ko-KR")}점 · 손상 마스크 ${number(evidenceTile?.masked_point_count).toLocaleString("ko-KR")}점`
+        : "이 타일에는 경량 현장 점군이 없습니다.";
     renderSummary();
     renderDefectTable();
     renderSegmentTable();
@@ -356,6 +442,11 @@
       : quality.point_sampling_applied
         ? `원본 ${number(quality.original_point_count).toLocaleString("ko-KR")}점에서 표본 추출`
         : "전체 입력 사용";
+    $("locationSummary").innerHTML = `<strong>${format(coverage.chainage_start_m, 0)}–${format(coverage.chainage_end_m, 0)} m 구간</strong><span>${sourceName}</span>`;
+    $("findingSummary").innerHTML = `<strong>손상 후보 ${number(results.defect_count).toLocaleString("ko-KR")}건</strong><span>포트홀 ${number(results.pothole_count)} · 러팅 ${number(results.rutting_count)} · 범프 ${number(results.bump_count)}</span>`;
+    $("actionSummary").innerHTML = ready
+      ? "<strong>후보별 현장 확인</strong><span>지도 마스크와 측정 단면을 대조한 뒤 보수 범위를 실측하세요.</span>"
+      : "<strong>자동 확정하지 않음</strong><span>데이터 품질을 보완하고 현장·RGB 대조 후 보수 여부를 결정하세요.</span>";
   }
 
   function defectPrimaryMetric(defect) {
@@ -371,6 +462,16 @@
     return ({ pothole: "포트홀", rutting: "러팅", bump: "범프", manhole_step_candidate: "맨홀 단차 후보", step_anomaly: "단차 후보", ponding_screening_proxy: "물고임 screening" })[type] || type;
   }
 
+  function severityName(value) {
+    return ({ high: "우선 확인", medium: "계획 확인", low: "관찰" })[value] || value || "확인 필요";
+  }
+
+  function defectAction(defect) {
+    if (defect.severity === "high") return "통행 안전을 먼저 확인하고 보수 경계·깊이를 현장에서 실측하세요.";
+    if (defect.severity === "medium") return "다음 현장 점검 대상에 포함하고 확대 여부를 기록하세요.";
+    return "정기 점검 목록에 등록하고 다음 조사와 변화량을 비교하세요.";
+  }
+
   function renderDefectTable() {
     const body = $("defectTable").querySelector("tbody");
     body.innerHTML = "";
@@ -381,6 +482,7 @@
       row.dataset.defectId = defect.defect_id;
       row.tabIndex = 0;
       row.setAttribute("role", "button");
+      row.classList.toggle("selected", defect.defect_id === state.selectedDefect?.defect_id);
       const reviewState = state.reviews?.defects?.[defect.defect_id]?.state || (state.sourceMode === "job" ? "pending" : "N/A");
       row.innerHTML = `<td>${defect.defect_id}</td><td>${defectName(defect.defect_type)}</td><td>${defect.lane_id || defect.road_zone || "unknown"}</td><td>${format(defect.chainage_m, 1)} m</td><td class="severity-${defect.severity}">${defect.severity}</td><td>${defectPrimaryMetric(defect)}</td><td>${format(number(defect.confidence) * 100, 0)}%</td><td>${reviewState}</td>`;
       row.addEventListener("click", () => selectDefect(defect.defect_id));
@@ -578,13 +680,22 @@
     const adapter = viewerCore.mapAdapterStatus($("mapAdapter").value, runtimeConfig, state.enuGeojson?.origin);
     $("adapterNotice").textContent = `${adapter.label}: ${adapter.message}`;
     const features = (state.enuGeojson?.features || []).filter((feature) => layerVisible(feature.properties));
-    const points = features.flatMap((feature) => feature.geometry?.coordinates?.[0] || []);
-    if (!points.length) {
+    const polygonPoints = features.flatMap((feature) => feature.geometry?.coordinates?.[0] || []);
+    const evidence = state.evidence;
+    if (!polygonPoints.length && !evidence?.count) {
       ctx.fillStyle = "#8fa9bf"; ctx.font = "14px system-ui"; ctx.fillText("표시 가능한 local ENU evidence가 없습니다.", 24, 42);
       return;
     }
-    const xs = points.map((point) => point[0]), ys = points.map((point) => point[1]);
-    const minX = Math.min(...xs), maxX = Math.max(...xs), minY = Math.min(...ys), maxY = Math.max(...ys);
+    let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+    for (const point of polygonPoints) {
+      minX = Math.min(minX, number(point[0])); maxX = Math.max(maxX, number(point[0]));
+      minY = Math.min(minY, number(point[1])); maxY = Math.max(maxY, number(point[1]));
+    }
+    for (let index = 0; index < number(evidence?.count); index += 1) {
+      const x = evidence.positions[index * 3], y = evidence.positions[index * 3 + 1];
+      minX = Math.min(minX, x); maxX = Math.max(maxX, x);
+      minY = Math.min(minY, y); maxY = Math.max(maxY, y);
+    }
     const margin = 42;
     const xOf = (value) => margin + (value - minX) / Math.max(1e-9, maxX - minX) * (width - 2 * margin);
     const yOf = (value) => height - margin - (value - minY) / Math.max(1e-9, maxY - minY) * (height - 2 * margin);
@@ -595,16 +706,78 @@
       ctx.beginPath(); ctx.moveTo(x, margin); ctx.lineTo(x, height - margin); ctx.stroke();
       ctx.beginPath(); ctx.moveTo(margin, y); ctx.lineTo(width - margin, y); ctx.stroke();
     }
+    if (evidence?.count) {
+      const contextStep = Math.max(1, Math.ceil(evidence.count / 30000));
+      ctx.globalAlpha = 0.72;
+      for (let index = 0; index < evidence.count; index += contextStep) {
+        if (evidence.defectClasses[index] !== 0) continue;
+        const colorOffset = index * 3;
+        ctx.fillStyle = `rgb(${evidence.colors[colorOffset]},${evidence.colors[colorOffset + 1]},${evidence.colors[colorOffset + 2]})`;
+        ctx.fillRect(xOf(evidence.positions[colorOffset]), yOf(evidence.positions[colorOffset + 1]), 1.7, 1.7);
+      }
+      ctx.globalAlpha = 1;
+      const maskColors = { 1: "#f04452", 2: "#ff9f1c", 3: "#bc6ff1", 4: "#00c2d7" };
+      for (let index = 0; index < evidence.count; index += 1) {
+        const defectClass = evidence.defectClasses[index];
+        if (!defectClass) continue;
+        const defectId = viewerCore.evidenceDefectId(state.evidenceTile, evidence.defectIndices[index]);
+        const defect = state.defects.find((item) => item.defect_id === defectId);
+        if (defect && !viewerCore.defectVisible(defect, visibilityOptions())) continue;
+        const positionOffset = index * 3;
+        const selected = defectId && defectId === state.selectedDefect?.defect_id;
+        ctx.beginPath();
+        ctx.arc(xOf(evidence.positions[positionOffset]), yOf(evidence.positions[positionOffset + 1]), selected ? 3.5 : 2.3, 0, Math.PI * 2);
+        ctx.fillStyle = selected ? "#ffffff" : (maskColors[defectClass] || "#f04452");
+        ctx.fill();
+      }
+    }
+    const polygonFills = { pothole: "rgba(240,68,82,.42)", rutting: "rgba(255,159,28,.38)", bump: "rgba(188,111,241,.38)" };
+    const polygonStrokes = { pothole: "#ff6673", rutting: "#ffc166", bump: "#cf8cff" };
     for (const feature of features) {
       const ring = feature.geometry.coordinates[0] || [];
       ctx.beginPath();
       ring.forEach((point, index) => index ? ctx.lineTo(xOf(point[0]), yOf(point[1])) : ctx.moveTo(xOf(point[0]), yOf(point[1])));
       ctx.closePath();
-      ctx.fillStyle = feature.id === state.selectedDefect?.defect_id ? "rgba(255,255,255,.55)" : "rgba(57,198,212,.35)";
-      ctx.strokeStyle = "#7ce3ae"; ctx.lineWidth = 2; ctx.fill(); ctx.stroke();
+      ctx.fillStyle = feature.id === state.selectedDefect?.defect_id ? "rgba(255,255,255,.50)" : (polygonFills[feature.properties.defect_type] || "rgba(0,194,215,.35)");
+      ctx.strokeStyle = feature.id === state.selectedDefect?.defect_id ? "#ffffff" : (polygonStrokes[feature.properties.defect_type] || "#00c2d7");
+      ctx.lineWidth = feature.id === state.selectedDefect?.defect_id ? 3 : 2; ctx.fill(); ctx.stroke();
     }
     ctx.fillStyle = "#9bb4c7"; ctx.font = "12px system-ui";
-    ctx.fillText(`${adapter.label} · local ENU metres · defect ID는 API와 동일`, 18, 24);
+    ctx.fillText(`${adapter.label} · 실제 점 ${number(evidence?.count).toLocaleString("ko-KR")}개 · 밝은 색은 손상 마스크`, 18, 24);
+  }
+
+  function prepareEvidenceWgs84() {
+    const evidence = state.evidence;
+    const origin = state.enuGeojson?.origin;
+    if (!evidence?.count || !origin) return null;
+    if (evidence.wgs84Positions) return evidence;
+    const wgs84Positions = new Float64Array(evidence.count * 3);
+    const heightStats = new Map();
+    let allUp = 0;
+    for (let index = 0; index < evidence.count; index += 1) {
+      const offset = index * 3;
+      const enu = [evidence.positions[offset], evidence.positions[offset + 1], evidence.positions[offset + 2]];
+      const converted = viewerCore.enuToWgs84(enu, origin);
+      wgs84Positions.set(converted, offset);
+      allUp += enu[2];
+      const defectId = viewerCore.evidenceDefectId(state.evidenceTile, evidence.defectIndices[index]);
+      if (defectId && evidence.defectClasses[index]) {
+        const stats = heightStats.get(defectId) || { sum: 0, count: 0 };
+        stats.sum += enu[2]; stats.count += 1; heightStats.set(defectId, stats);
+      }
+    }
+    evidence.wgs84Positions = wgs84Positions;
+    evidence.meanUpM = allUp / Math.max(1, evidence.count);
+    evidence.defectUpM = new Map([...heightStats].map(([key, value]) => [key, value.sum / value.count]));
+    return evidence;
+  }
+
+  function cesiumDefectColor(C, type, selected) {
+    if (selected) return C.Color.WHITE;
+    if (type === "pothole") return C.Color.fromBytes(240, 68, 82, 255);
+    if (type === "rutting") return C.Color.fromBytes(255, 159, 28, 255);
+    if (type === "bump") return C.Color.fromBytes(188, 111, 241, 255);
+    return C.Color.fromBytes(0, 194, 215, 255);
   }
 
   async function ensureVWorldMap() {
@@ -670,6 +843,7 @@
   }
 
   async function renderVWorld() {
+    const renderToken = ++state.vworld.renderToken;
     const adapter = viewerCore.mapAdapterStatus("vworld", runtimeConfig, state.enuGeojson?.origin);
     $("adapterNotice").textContent = `${adapter.label}: ${adapter.message}`;
     if (!adapter.ready) {
@@ -680,36 +854,124 @@
     }
     try {
       const viewer = await ensureVWorldMap();
-      if ($("viewMode").value !== "map" || $("mapAdapter").value !== "vworld") return;
+      if (renderToken !== state.vworld.renderToken || $("viewMode").value !== "map" || $("mapAdapter").value !== "vworld") return;
       const C = window.Cesium;
       if (!C) throw new Error("VWorld Cesium runtime is unavailable");
       if (!state.vworld.dataSource) {
         state.vworld.dataSource = new C.CustomDataSource("road-condition-defects");
         await viewer.dataSources.add(state.vworld.dataSource);
       }
+      if (!state.vworld.selectionListenerInstalled && viewer.selectedEntityChanged?.addEventListener) {
+        viewer.selectedEntityChanged.addEventListener((entity) => {
+          const defectId = entity?.id;
+          if (defectId && state.defects.some((item) => item.defect_id === defectId)) selectDefect(defectId);
+        });
+        state.vworld.selectionListenerInstalled = true;
+      }
       const entities = state.vworld.dataSource.entities;
       entities.removeAll();
-      const wgs84 = viewerCore.enuFeatureCollectionToWgs84(state.enuGeojson);
-      for (const feature of wgs84.features || []) {
+      if (!state.vworld.pointCollection) {
+        state.vworld.pointCollection = viewer.scene.primitives.add(new C.PointPrimitiveCollection());
+      } else {
+        state.vworld.pointCollection.removeAll();
+      }
+      const evidence = prepareEvidenceWgs84();
+      const visualLiftM = 0.15;
+      let renderedPoints = 0;
+      if (evidence) {
+        const contextStep = Math.max(1, Math.ceil(evidence.count / 35000));
+        for (let index = 0; index < evidence.count; index += 1) {
+          const defectClass = evidence.defectClasses[index];
+          if (!defectClass && index % contextStep !== 0) continue;
+          const defectId = viewerCore.evidenceDefectId(state.evidenceTile, evidence.defectIndices[index]);
+          const defect = state.defects.find((item) => item.defect_id === defectId);
+          if (defect && !viewerCore.defectVisible(defect, visibilityOptions())) continue;
+          const selected = defectId && defectId === state.selectedDefect?.defect_id;
+          const offset = index * 3;
+          const color = defectClass
+            ? cesiumDefectColor(C, defect?.defect_type, selected)
+            : C.Color.fromBytes(
+              Math.max(35, evidence.colors[offset]),
+              Math.max(35, evidence.colors[offset + 1]),
+              Math.max(35, evidence.colors[offset + 2]),
+              190
+            );
+          state.vworld.pointCollection.add({
+            position: C.Cartesian3.fromDegrees(
+              evidence.wgs84Positions[offset],
+              evidence.wgs84Positions[offset + 1],
+              evidence.wgs84Positions[offset + 2] + visualLiftM
+            ),
+            color,
+            pixelSize: selected ? 7 : defectClass ? 5 : 2,
+            outlineColor: selected ? C.Color.BLACK : color,
+            outlineWidth: selected ? 1.5 : 0,
+            disableDepthTestDistance: Number.POSITIVE_INFINITY,
+            id: defectId || undefined
+          });
+          renderedPoints += 1;
+        }
+      }
+      const defaultUpM = evidence?.meanUpM || 0;
+      for (const feature of state.enuGeojson?.features || []) {
         if (!layerVisible(feature.properties)) continue;
         const ring = feature.geometry?.coordinates?.[0] || [];
         if (ring.length < 3) continue;
         const selected = feature.id === state.selectedDefect?.defect_id;
-        const degrees = ring.flatMap((point) => [point[0], point[1]]);
+        const upM = evidence?.defectUpM?.get(feature.id) ?? defaultUpM;
+        const cartesianRing = ring.map((point) => {
+          const converted = viewerCore.enuToWgs84([point[0], point[1], upM + visualLiftM], state.enuGeojson.origin);
+          return C.Cartesian3.fromDegrees(converted[0], converted[1], converted[2]);
+        });
+        const color = cesiumDefectColor(C, feature.properties.defect_type, selected);
         entities.add({
           id: feature.id,
           name: `${defectName(feature.properties.defect_type)} · ${feature.id}`,
+          properties: feature.properties,
           polygon: {
-            hierarchy: C.Cartesian3.fromDegreesArray(degrees),
-            material: (selected ? C.Color.WHITE : C.Color.CYAN).withAlpha(selected ? 0.65 : 0.38),
+            hierarchy: new C.PolygonHierarchy(cartesianRing),
+            perPositionHeight: true,
+            material: color.withAlpha(selected ? 0.66 : 0.40),
             outline: true,
-            outlineColor: selected ? C.Color.WHITE : C.Color.CYAN,
-            height: number(state.enuGeojson.origin?.ellipsoid_height_m)
+            outlineColor: color
           }
         });
       }
-      if (entities.values.length) await viewer.flyTo(state.vworld.dataSource, { duration: 0.8 });
-      $("adapterNotice").textContent = `VWorld 연결됨 · EPSG:4326 변환 · 후보 ${entities.values.length}개 표시`;
+      const currentTile = state.routeTiles[state.routeTileIndex];
+      const tileKey = currentTile ? `${currentTile.path}/${currentTile.tileId}` : `job/${state.jobId}`;
+      const tileChanged = state.vworld.renderedTileKey !== tileKey;
+      const selectedChanged = state.vworld.selectedDefectId !== state.selectedDefect?.defect_id;
+      if (evidence && (tileChanged || selectedChanged)) {
+        let longitude, latitude, height;
+        if (!tileChanged && state.selectedDefect) {
+          const selectedIndices = [];
+          for (let index = 0; index < evidence.count; index += 1) {
+            if (viewerCore.evidenceDefectId(state.evidenceTile, evidence.defectIndices[index]) === state.selectedDefect.defect_id) selectedIndices.push(index);
+          }
+          const targets = selectedIndices.length ? selectedIndices : [...Array(evidence.count).keys()];
+          longitude = targets.reduce((sum, index) => sum + evidence.wgs84Positions[index * 3], 0) / targets.length;
+          latitude = targets.reduce((sum, index) => sum + evidence.wgs84Positions[index * 3 + 1], 0) / targets.length;
+          height = targets.reduce((sum, index) => sum + evidence.wgs84Positions[index * 3 + 2], 0) / targets.length;
+        } else {
+          longitude = 0; latitude = 0; height = 0;
+          for (let index = 0; index < evidence.count; index += 1) {
+            longitude += evidence.wgs84Positions[index * 3];
+            latitude += evidence.wgs84Positions[index * 3 + 1];
+            height += evidence.wgs84Positions[index * 3 + 2];
+          }
+          longitude /= evidence.count; latitude /= evidence.count; height /= evidence.count;
+        }
+        viewer.camera.flyTo({
+          destination: C.Cartesian3.fromDegrees(longitude, latitude, height + (tileChanged ? 28 : 13)),
+          orientation: { heading: 0, pitch: C.Math.toRadians(tileChanged ? -88 : -78), roll: 0 },
+          duration: 0.7
+        });
+      } else if (!evidence && entities.values.length && tileChanged) {
+        await viewer.flyTo(state.vworld.dataSource, { duration: 0.8 });
+      }
+      state.vworld.renderedTileKey = tileKey;
+      state.vworld.selectedDefectId = state.selectedDefect?.defect_id || null;
+      $("adapterNotice").textContent = `VWorld 연결됨 · 실제 포인트 ${renderedPoints.toLocaleString("ko-KR")}점 · 손상 마스크 ${entities.values.length}건 · 지형 가림 방지 표시 적용`;
     } catch (error) {
       $("vworldMap").hidden = true;
       $("mapCanvas").hidden = false;
@@ -735,9 +997,9 @@
       ? "가로: 진행거리 s(m) · 세로: 횡방향 t(m) · 색상: 기준면 대비 높이 잔차(cm) · 상단 색 띠: 구간 등급"
       : mode === "perspective"
         ? "잔차 preview grid의 경량 3D evidence · 전체 PLY를 브라우저로 보내지 않음"
-        : useVWorld
-          ? "VWorld basemap · local ENU 결함을 EPSG:4326으로 변환해 표시"
-          : "Local ENU evidence adapter · 외부 지도 실패 시 오프라인 fallback";
+      : useVWorld
+          ? "VWorld 지도 위 실제 수집 점군 · 빨강 포트홀 · 주황 러팅 · 보라 범프 · 마스크는 현장 검수 전 후보"
+          : "Local ENU 실제 수집 점군 · 외부 지도 실패 시 오프라인 대체 화면";
   }
 
   function pointInPolygon(point, polygon) {
@@ -781,10 +1043,10 @@
       $("reviewControls").hidden = true;
       return;
     }
-    $("selectedBadge").textContent = `${defectName(defect.defect_type)} · ${defect.severity}`;
+    $("selectedBadge").textContent = `${defectName(defect.defect_type)} · ${severityName(defect.severity)}`;
     const flags = (defect.quality_flags || []).length ? defect.quality_flags.join(", ") : "없음";
     const review = state.reviews?.defects?.[defect.defect_id];
-    $("defectDetail").innerHTML = `<strong>${defect.defect_id}</strong><p>차로/구역 ${defect.lane_id || defect.road_zone || "unknown"} · 체인리지 ${format(defect.chainage_m, 2)} m · 횡방향 ${format(defect.lateral_offset_m, 2)} m</p><p>측정: ${defectPrimaryMetric(defect)} · 후보 내부 신뢰도 ${format(number(defect.confidence) * 100, 0)}%</p><p class="muted">후보 신뢰도가 높아도 상단 데이터 판독 상태가 우선입니다.</p><p class="muted">품질 플래그: ${flags}</p><p class="muted">RGB evidence: N/A — 연결된 frame evidence 없음</p><p>검수: <strong>${review?.state || "N/A"}</strong>${review ? ` · version ${review.version}` : ""}</p>`;
+    $("defectDetail").innerHTML = `<div class="plain-finding"><span>무엇이 보였나</span><strong>${defectName(defect.defect_type)} 형태 · ${defectPrimaryMetric(defect)}</strong></div><div class="plain-finding"><span>어디인가</span><strong>조사 시작점에서 ${format(defect.chainage_m, 1)} m · 도로 중심 기준 ${format(defect.lateral_offset_m, 1)} m</strong></div><div class="plain-finding action"><span>다음 조치</span><strong>${defectAction(defect)}</strong></div><details class="technical-note"><summary>측정 상세 보기</summary><p>ID ${defect.defect_id} · 차로/구역 ${defect.lane_id || defect.road_zone || "unknown"}</p><p>후보 내부 신뢰도 ${format(number(defect.confidence) * 100, 0)}% · 품질 플래그 ${flags}</p><p>RGB 사진 증거 N/A · 연결된 frame evidence 없음</p><p>검수 ${review?.state || "N/A"}${review ? ` · version ${review.version}` : ""}</p></details>`;
     $("reviewControls").hidden = state.sourceMode !== "job" || !review;
     $("reviewSeverity").value = review?.current_annotation?.severity || defect.severity || "low";
     $("reviewStatus").textContent = review ? `raw prediction 보존 · 현재 version ${review.version}` : "";

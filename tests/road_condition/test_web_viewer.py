@@ -56,6 +56,9 @@ def test_web_viewer_has_progressive_route_and_accessibility_contract() -> None:
     assert 'number($("rutDepth").value, 2.0) / 100' in script
     assert 'pageParams.getAll("route")' in script
     assert "multiview_filter_applied" in script
+    assert "window.ws3d?.viewer" in script
+    assert 'window.location.protocol === "https:"' in html
+    assert "window.location.origin" in html
     assert "COPY services/road_condition_web/viewer_core.js" in dockerfile
     assert "runtime-config.js.template" in dockerfile
 

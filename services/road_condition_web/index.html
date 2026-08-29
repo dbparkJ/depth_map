@@ -10,7 +10,13 @@
     (() => {
       const config = window.ROAD_CONDITION_CONFIG || {};
       const key = String(config.vworldApiKey || "").trim();
-      const domain = String(config.vworldDomain || "").trim();
+      const configuredDomain = String(config.vworldDomain || "").trim();
+      // VWorld chooses HTTP/HTTPS for its child scripts from the domain value.
+      // An HTTPS tunnel must therefore send its real HTTPS origin to avoid
+      // mixed-content blocking, while local HTTP keeps the configured domain.
+      const domain = window.location.protocol === "https:"
+        ? window.location.origin
+        : configuredDomain;
       if (!key || !domain) return;
       const params = new URLSearchParams({ version: "3.0", apiKey: key, domain });
       document.write(`<script id="vworldSdk" src="https://map.vworld.kr/js/webglMapInit.js.do?${params}"><\/script>`);

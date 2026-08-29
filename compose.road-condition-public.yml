@@ -1,0 +1,38 @@
+name: depth-map-road-condition-public
+
+services:
+  road-condition-public-gateway:
+    image: nginx:1.27-alpine
+    volumes:
+      - ./services/road_condition_public/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+    ports:
+      - "127.0.0.1:${ROAD_CONDITION_PUBLIC_PORT:-18082}:8082"
+    networks:
+      - road-condition
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8082/api/v1/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+
+  cloudflare-tunnel:
+    image: cloudflare/cloudflared:2026.8.2
+    command:
+      - tunnel
+      - --no-autoupdate
+      - --url
+      - http://road-condition-public-gateway:8082
+      - --metrics
+      - 0.0.0.0:2000
+    depends_on:
+      road-condition-public-gateway:
+        condition: service_healthy
+    networks:
+      - road-condition
+    restart: unless-stopped
+
+networks:
+  road-condition:
+    external: true
+    name: depth-map-road-condition_default

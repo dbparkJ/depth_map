@@ -619,16 +619,28 @@
       }
       const origin = state.enuGeojson.origin;
       return new Promise((resolve, reject) => {
-        const timeout = window.setTimeout(() => reject(new Error("VWorld initialization timed out")), 18000);
-        window.vw.ws3dInitCallBack = () => {
-          window.clearTimeout(timeout);
-          try {
-            state.vworld.viewer = window.ws3d.viewer;
-            resolve(state.vworld.viewer);
-          } catch (error) {
-            reject(error);
-          }
+        let finished = false;
+        let poll = null;
+        let timeout = null;
+        const cleanup = () => {
+          if (poll !== null) window.clearInterval(poll);
+          if (timeout !== null) window.clearTimeout(timeout);
         };
+        const resolveViewer = () => {
+          if (finished || !window.ws3d?.viewer) return;
+          finished = true;
+          cleanup();
+          state.vworld.viewer = window.ws3d.viewer;
+          resolve(state.vworld.viewer);
+        };
+        timeout = window.setTimeout(() => {
+          if (finished) return;
+          finished = true;
+          cleanup();
+          reject(new Error("VWorld initialization timed out"));
+        }, 18000);
+        poll = window.setInterval(resolveViewer, 100);
+        window.vw.ws3dInitCallBack = resolveViewer;
         try {
           state.vworld.map = new window.vw.Map();
           state.vworld.map.setOption({
@@ -641,8 +653,10 @@
             navigation: true
           });
           state.vworld.map.start();
+          resolveViewer();
         } catch (error) {
-          window.clearTimeout(timeout);
+          finished = true;
+          cleanup();
           reject(error);
         }
       });

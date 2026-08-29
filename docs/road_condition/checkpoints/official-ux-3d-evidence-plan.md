@@ -52,8 +52,11 @@ mask를 함께 보는 현장 공감 evidence로는 부족하다.
 
 ### 선택
 
-먼저 `route tile 전용 quantized evidence binary`를 구현한다. PoC 성능을 기록한 뒤 전체 노선
-LOD가 필요할 때 Potree/3D Tiles와 비교한다. 형식은 원본 PLY를 대체하지 않는 파생 evidence다.
+먼저 `route tile 전용 quantized evidence binary`를 구현한다. 화면 문맥에는 기존 후처리에서
+97% 이상 보존된 clean browser sample을 쓰고, 손상 분석 자체는 계속 raw PLY/metadata를 쓴다.
+clean sample이 없는 이전 bundle만 raw browser sample로 fallback한다. PoC 성능을 기록한 뒤
+전체 노선 LOD가 필요할 때 Potree/3D Tiles와 비교한다. 형식은 원본 PLY를 대체하지 않는 파생
+evidence다.
 
 ```text
 evidence/

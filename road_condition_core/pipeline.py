@@ -393,7 +393,48 @@ def analyze_points(
         prepared_metadata,
         resolved_config.surface.max_input_points,
     )
-    sampled_count_before_roi = len(points)
+    sampled_count = len(points)
+    multiview_quality: dict[str, Any] = {
+        "multiview_evidence_available": False,
+        "multiview_filter_applied": False,
+        "multiview_input_point_count": int(len(points)),
+        "multiview_retained_point_count": int(len(points)),
+        "minimum_independent_view_count": int(
+            resolved_config.surface.minimum_independent_view_count
+        ),
+    }
+    independent_views = metadata.get("independent_view_count")
+    if independent_views is not None:
+        independent_views = np.asarray(independent_views)
+        if independent_views.shape != (len(points),):
+            raise ValueError("independent_view_count must align with points")
+        retained = (
+            independent_views
+            >= resolved_config.surface.minimum_independent_view_count
+        )
+        retained_count = int(np.count_nonzero(retained))
+        if retained_count < resolved_config.surface.reference_min_cells:
+            raise ValueError(
+                "multi-view evidence retained too few points for surface fitting"
+            )
+        points = points[retained]
+        colors = colors[retained]
+        metadata = {
+            name: np.asarray(values)[retained]
+            for name, values in metadata.items()
+            if np.asarray(values).shape == (len(retained),)
+        }
+        multiview_quality = {
+            "multiview_evidence_available": True,
+            "multiview_filter_applied": True,
+            "multiview_input_point_count": int(len(retained)),
+            "multiview_retained_point_count": retained_count,
+            "multiview_excluded_point_count": int(len(retained) - retained_count),
+            "multiview_retained_ratio": float(retained_count / len(retained)),
+            "minimum_independent_view_count": int(
+                resolved_config.surface.minimum_independent_view_count
+            ),
+        }
     roi_quality: dict[str, Any] = {
         "roi_applied": False,
         "roi_source": "trajectory_corridor_fallback",
@@ -627,7 +668,7 @@ def analyze_points(
         "quality": {
             "original_point_count": int(original_count),
             "analyzed_point_count": int(len(points)),
-            "point_sampling_applied": bool(original_count != sampled_count_before_roi),
+            "point_sampling_applied": bool(original_count != sampled_count),
             "supported_surface_cell_count": supported_cells,
             "usable_surface_cell_count": valid_cells,
             "plausibility_excluded_cell_count": excluded_cells,
@@ -642,6 +683,7 @@ def analyze_points(
             ),
             **dict(quality_context or {}),
             "pose_surface_mode": reprojection_quality,
+            **multiview_quality,
             **roi_quality,
         },
         "coverage": {
@@ -720,6 +762,10 @@ def analyze_points(
     if bool((quality_context or {}).get("manual_review_required", False)):
         summary["limitations"].append(
             "Camera calibration is unknown or estimated; geometry results require manual review."
+        )
+    if not multiview_quality["multiview_evidence_available"]:
+        summary["limitations"].append(
+            "Independent-view point evidence is unavailable; transient-object filtering was not applied."
         )
     if resolved_config.advanced_geometry.step_manhole_enabled:
         summary["limitations"].append(

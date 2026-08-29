@@ -27,6 +27,7 @@ class SurfaceConfig:
     # points or changing the mapping bundle.
     plausibility_residual_min_m: float = -0.30
     plausibility_residual_max_m: float = 0.25
+    minimum_independent_view_count: int = 2
     max_input_points: int = 2_000_000
     preview_max_along_cells: int = 420
     preview_max_cross_cells: int = 140
@@ -61,6 +62,8 @@ class SurfaceConfig:
             raise ValueError("plausibility_residual_max_m must be positive")
         if self.plausibility_residual_min_m >= self.plausibility_residual_max_m:
             raise ValueError("plausibility residual range is invalid")
+        if self.minimum_independent_view_count < 1:
+            raise ValueError("minimum_independent_view_count must be at least 1")
         if self.max_input_points < 10_000:
             raise ValueError("max_input_points must be at least 10,000")
 

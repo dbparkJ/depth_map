@@ -147,7 +147,14 @@ def _run_job(
                 settings.workspace_root,
                 request.mapping_output_path or "",
             )
-            bundle = load_mapping_bundle(resolved, stage=request.point_cloud_stage)
+            metadata_fields = {"position_std_m", "independent_view_count"}
+            if config.pose.frame_reprojection_enabled:
+                metadata_fields.add("source_frame_id")
+            bundle = load_mapping_bundle(
+                resolved,
+                stage=request.point_cloud_stage,
+                metadata_fields=metadata_fields,
+            )
             points = bundle.points_enu_m
             colors = bundle.colors_rgb
             trajectory = bundle.trajectory_enu_m

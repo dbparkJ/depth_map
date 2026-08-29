@@ -54,6 +54,8 @@ def test_web_viewer_has_progressive_route_and_accessibility_contract() -> None:
     assert "높이 잔차(cm)" in script
     assert 'number($("potholeDepth").value, 3.5) / 100' in script
     assert 'number($("rutDepth").value, 2.0) / 100' in script
+    assert 'pageParams.getAll("route")' in script
+    assert "multiview_filter_applied" in script
     assert "COPY services/road_condition_web/viewer_core.js" in dockerfile
     assert "runtime-config.js.template" in dockerfile
 

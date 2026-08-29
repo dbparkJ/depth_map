@@ -4,6 +4,7 @@
   const viewerCore = window.RoadConditionViewerCore;
   if (!viewerCore) throw new Error("viewer_core.js is required");
   const runtimeConfig = window.ROAD_CONDITION_CONFIG || {};
+  const pageParams = new URLSearchParams(window.location.search);
 
   const state = {
     jobId: null,
@@ -319,6 +320,8 @@
     if (lowCoverage) reasons.push(`표면 커버리지 ${format(coverageRatio * 100, 1)}%로 내부 최소 기준 ${format(minimumCoverage * 100, 1)}% 미달`);
     if (manualReview) reasons.push(`카메라 보정 상태 ${quality.calibration_status || "unknown"} · 수동 검수 필수`);
     if (roiFallback) reasons.push("도로 ROI 없음 · trajectory corridor 임시 사용");
+    if (quality.multiview_filter_applied === true) reasons.push(`독립 시점 ${number(quality.minimum_independent_view_count, 2)}개 미만 점 ${number(quality.multiview_excluded_point_count).toLocaleString("ko-KR")}개 제외`);
+    if (source.type === "mapping_bundle" && quality.multiview_evidence_available === false) reasons.push("다중 시점 evidence 없음 · 일시 물체 필터 미적용");
     if (excludedCells > 0) reasons.push(`비현실 잔차 셀 ${excludedCells.toLocaleString("ko-KR")}개를 결함 판정에서 제외`);
     const ready = !lowCoverage && !manualReview;
     $("qualityBanner").className = `quality-banner ${ready ? "ready" : "hold"}`;
@@ -348,9 +351,11 @@
     $("coverageCard").classList.toggle("danger", lowCoverage);
     $("scoreCard").classList.toggle("muted-card", !ready);
     $("analyzedPoints").textContent = number(quality.analyzed_point_count).toLocaleString("ko-KR");
-    $("samplingInfo").textContent = quality.point_sampling_applied
-      ? `원본 ${number(quality.original_point_count).toLocaleString("ko-KR")}점에서 표본 추출`
-      : "전체 입력 사용";
+    $("samplingInfo").textContent = quality.multiview_filter_applied
+      ? `다중 시점 ${number(quality.multiview_input_point_count).toLocaleString("ko-KR")}점 → ${number(quality.multiview_retained_point_count).toLocaleString("ko-KR")}점`
+      : quality.point_sampling_applied
+        ? `원본 ${number(quality.original_point_count).toLocaleString("ko-KR")}점에서 표본 추출`
+        : "전체 입력 사용";
   }
 
   function defectPrimaryMetric(defect) {
@@ -918,6 +923,12 @@
       await api("/api/v1/health");
       setApiStatus("API 정상", "ok");
       const jobs = await refreshJobs();
+      const requestedRoutes = pageParams.getAll("route").map((value) => value.trim()).filter(Boolean);
+      if (requestedRoutes.length) {
+        $("routePaths").value = requestedRoutes.join("\n");
+        await loadRouteDatasets();
+        return;
+      }
       const completed = jobs.find((job) => job.state === "completed");
       const active = jobs.find((job) => job.state === "queued" || job.state === "running");
       if (completed) await openJob(completed.job_id);
@@ -965,8 +976,8 @@
   });
   window.addEventListener("resize", () => { if (state.surface) renderCurrentView(); });
 
-  const requestedView = new URLSearchParams(window.location.search).get("view");
-  const requestedAdapter = new URLSearchParams(window.location.search).get("adapter");
+  const requestedView = pageParams.get("view");
+  const requestedAdapter = pageParams.get("adapter");
   if (["plan", "perspective", "map"].includes(requestedView)) $("viewMode").value = requestedView;
   if (["local_enu", "vworld", "cesium"].includes(requestedAdapter)) $("mapAdapter").value = requestedAdapter;
 

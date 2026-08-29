@@ -132,12 +132,18 @@ def read_depth_map_ply(path: str | Path) -> tuple[np.ndarray, np.ndarray]:
     return np.asarray(points), np.asarray(colors)
 
 
-def _load_numeric_npz(path: Path, expected_count: int) -> dict[str, np.ndarray]:
+def _load_numeric_npz(
+    path: Path,
+    expected_count: int,
+    fields: set[str] | None = None,
+) -> dict[str, np.ndarray]:
     if not path.is_file():
         return {}
     result: dict[str, np.ndarray] = {}
     with np.load(path, allow_pickle=False) as archive:
         for name in archive.files:
+            if fields is not None and name not in fields:
+                continue
             value = np.asarray(archive[name])
             if value.dtype.hasobject:
                 raise ValueError(f"metadata array {name!r} uses object dtype")
@@ -261,6 +267,7 @@ def load_mapping_bundle(
     output_dir: str | Path,
     *,
     stage: str = "raw",
+    metadata_fields: set[str] | None = None,
 ) -> MappingBundle:
     resolved = Path(output_dir).expanduser().resolve()
     data_dir = resolved / "data"
@@ -286,7 +293,11 @@ def load_mapping_bundle(
 
     summary = json.loads(required["summary"].read_text(encoding="utf-8"))
     metadata_path = data_dir / "cloud_raw_metadata.npz"
-    metadata = _load_numeric_npz(metadata_path, len(points)) if stage == "raw" else {}
+    metadata = (
+        _load_numeric_npz(metadata_path, len(points), metadata_fields)
+        if stage == "raw"
+        else {}
+    )
     pose_path = data_dir / "camera_poses.npz"
     camera_poses = _load_camera_poses(pose_path) if pose_path.is_file() else None
     if camera_poses is not None and len(camera_poses.frame_index) != len(

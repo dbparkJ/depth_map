@@ -27,7 +27,11 @@ def build_parser() -> argparse.ArgumentParser:
 def main() -> None:
     args = build_parser().parse_args()
     mapping_output = args.mapping_output.expanduser().resolve()
-    bundle = load_mapping_bundle(mapping_output, stage=args.point_cloud_stage)
+    bundle = load_mapping_bundle(
+        mapping_output,
+        stage=args.point_cloud_stage,
+        metadata_fields={"position_std_m", "independent_view_count"},
+    )
     roi_path = None
     if args.road_roi_path:
         roi_path = resolve_roi_path(mapping_output, args.road_roi_path)

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 
+import numpy as np
 import pytest
 
 from road_condition_core.config import AnalysisConfig
@@ -168,3 +169,58 @@ def test_implausible_surface_cells_are_excluded_and_accounted() -> None:
 def test_plausibility_residual_range_is_validated(name: str, value: float) -> None:
     with pytest.raises(ValueError, match=name):
         AnalysisConfig.from_overrides({"surface": {name: value}})
+
+
+def test_multiview_evidence_filters_transient_points_when_available() -> None:
+    scene = generate_synthetic_scene(
+        "flat",
+        length_m=24.0,
+        resolution_m=0.15,
+        observations_per_cell=4,
+        seed=29,
+    )
+    points = scene.points_enu_m.copy()
+    transient = (
+        (points[:, 0] >= 8.0)
+        & (points[:, 0] < 9.0)
+        & (points[:, 1] >= 0.4)
+        & (points[:, 1] < 1.4)
+    )
+    points[transient, 2] += 0.18
+    independent_views = np.full(len(points), 3, dtype=np.uint16)
+    independent_views[transient] = 1
+    products = analyze_points(
+        points,
+        scene.colors_rgb,
+        scene.trajectory_enu_m,
+        config=AnalysisConfig.from_overrides(
+            {"surface": {"grid_size_m": 0.15, "reference_min_cells": 80}}
+        ),
+        point_metadata={"independent_view_count": independent_views},
+        source={"type": "synthetic", "profile": "flat_with_transient_object"},
+    )
+    quality = products.summary["quality"]
+    assert quality["multiview_filter_applied"] is True
+    assert quality["multiview_excluded_point_count"] == int(np.count_nonzero(transient))
+    assert products.summary["results"]["bump_count"] == 0
+
+
+def test_multiview_evidence_absence_preserves_compatibility() -> None:
+    scene = generate_synthetic_scene(
+        "flat",
+        length_m=24.0,
+        resolution_m=0.15,
+        observations_per_cell=4,
+        seed=31,
+    )
+    products = analyze_points(
+        scene.points_enu_m,
+        scene.colors_rgb,
+        scene.trajectory_enu_m,
+        config=AnalysisConfig.from_overrides(
+            {"surface": {"grid_size_m": 0.15, "reference_min_cells": 80}}
+        ),
+    )
+    quality = products.summary["quality"]
+    assert quality["multiview_evidence_available"] is False
+    assert quality["multiview_filter_applied"] is False

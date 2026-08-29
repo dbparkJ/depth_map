@@ -73,6 +73,12 @@ def test_pose_matrix_export_and_optional_bundle_loading(tmp_path: Path) -> None:
         encoding="utf-8",
     )
     (data / "summary.json").write_text('{"format_version": 1}', encoding="utf-8")
+    np.savez_compressed(
+        data / "cloud_raw_metadata.npz",
+        position_std_m=np.full(3, 0.01, dtype=np.float32),
+        independent_view_count=np.full(3, 2, dtype=np.uint16),
+        unused_field=np.arange(3, dtype=np.int32),
+    )
     manifest = build_analysis_source_manifest(
         dataset_id="fixture",
         mapping_commit_sha="a" * 40,
@@ -93,6 +99,12 @@ def test_pose_matrix_export_and_optional_bundle_loading(tmp_path: Path) -> None:
     assert bundle.analysis_capabilities["camera_pose_contract"] is True
     assert bundle.analysis_quality["manual_review_required"] is True
     assert "manual_review_required" in bundle.analysis_quality["quality_flags"]
+    selected = load_mapping_bundle(
+        mapping,
+        stage="raw",
+        metadata_fields={"independent_view_count"},
+    )
+    assert set(selected.point_metadata) == {"independent_view_count"}
 
 
 def test_noise_scaled_recommendation_and_calibration_bundle(tmp_path: Path) -> None:

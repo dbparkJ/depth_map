@@ -59,6 +59,8 @@ class MaintenanceCatalog:
     unpriced_components: dict[str, None]
     recommendation_rules: dict[str, Any]
     deterioration: dict[str, Any]
+    references: list[dict[str, Any]]
+    public_project_context: list[dict[str, Any]]
     catalog_sha256: str
 
     def contract(self) -> dict[str, Any]:
@@ -71,6 +73,20 @@ class MaintenanceCatalog:
             "approval_status": self.approval_status,
             "currency": self.currency,
             "price_basis": self.price_basis,
+            "references": copy.deepcopy(self.references),
+            "public_project_context": copy.deepcopy(self.public_project_context),
+            "method_basis": {
+                name: {
+                    "label": value["label"],
+                    "pricing_status": value.get(
+                        "pricing_status", "experimental_planning_rate"
+                    ),
+                    "area_krw_per_m2": value.get("area_krw_per_unit"),
+                    "source_item_codes": list(value.get("source_item_codes") or []),
+                    "included_components": list(value.get("included_components") or []),
+                }
+                for name, value in self.methods.items()
+            },
         }
 
 
@@ -91,19 +107,28 @@ def _validate_catalog(payload: Mapping[str, Any], expected_id: str) -> None:
         "deterioration",
     }
     missing = required - set(payload)
-    unknown = set(payload) - required
+    optional = {"references", "public_project_context"}
+    unknown = set(payload) - required - optional
     if missing:
         raise ValueError("maintenance catalog fields missing: " + ", ".join(sorted(missing)))
     if unknown:
         raise ValueError("unknown maintenance catalog fields: " + ", ".join(sorted(unknown)))
     if payload["catalog_id"] != expected_id:
         raise ValueError("catalog_id does not match filename")
-    if payload["approval_status"] not in {"experimental", "approved_internal", "retired"}:
+    if payload["approval_status"] not in {
+        "experimental",
+        "official_reference_experimental_assembly",
+        "approved_internal",
+        "retired",
+    }:
         raise ValueError("unsupported maintenance catalog approval_status")
-    if payload["approval_status"] == "approved_internal" and (
+    if payload["approval_status"] in {
+        "approved_internal",
+        "official_reference_experimental_assembly",
+    } and (
         not payload["source_document"] or not payload["effective_date"]
     ):
-        raise ValueError("approved catalog requires source_document and effective_date")
+        raise ValueError("sourced catalog requires source_document and effective_date")
     for name in ("version", "currency", "price_basis"):
         if not isinstance(payload[name], str) or not payload[name]:
             raise ValueError(f"{name} is required")
@@ -119,7 +144,16 @@ def _validate_catalog(payload: Mapping[str, Any], expected_id: str) -> None:
         if method.get("quantity_unit") != "m2":
             raise ValueError(f"{method_name}.quantity_unit must be m2")
         _finite_nonnegative(method.get("minimum_quantity"), f"{method_name}.minimum_quantity")
-        _finite_nonnegative(method.get("area_krw_per_unit"), f"{method_name}.area_krw_per_unit")
+        area_rate = _finite_nonnegative(
+            method.get("area_krw_per_unit"),
+            f"{method_name}.area_krw_per_unit",
+            allow_null=True,
+        )
+        pricing_status = method.get("pricing_status", "experimental_planning_rate")
+        if area_rate is None and pricing_status != "not_priced_by_selected_official_items":
+            raise ValueError(
+                f"{method_name}.area_krw_per_unit may be null only for an unpriced method"
+            )
         _finite_nonnegative(
             method.get("secondary_volume_krw_per_m3"),
             f"{method_name}.secondary_volume_krw_per_m3",
@@ -134,8 +168,8 @@ def _validate_catalog(payload: Mapping[str, Any], expected_id: str) -> None:
     _finite_nonnegative(mobilization.get("krw_per_scenario"), "mobilization.krw_per_scenario")
     unpriced = payload["unpriced_components"]
     expected_unpriced = {"traffic_control", "equipment_relocation", "waste_disposal"}
-    if not isinstance(unpriced, Mapping) or set(unpriced) != expected_unpriced:
-        raise ValueError("unpriced_components must list traffic control, relocation, and waste")
+    if not isinstance(unpriced, Mapping) or not expected_unpriced.issubset(unpriced):
+        raise ValueError("unpriced_components must include traffic control, relocation, and waste")
     if any(value is not None for value in unpriced.values()):
         raise ValueError("unprovided cost components must be null, never zero")
     deterioration = payload["deterioration"]
@@ -175,6 +209,10 @@ def load_maintenance_catalog(root: str | Path, catalog_id: str) -> MaintenanceCa
         unpriced_components=copy.deepcopy(payload["unpriced_components"]),
         recommendation_rules=copy.deepcopy(payload["recommendation_rules"]),
         deterioration=copy.deepcopy(payload["deterioration"]),
+        references=copy.deepcopy(payload.get("references") or []),
+        public_project_context=copy.deepcopy(
+            payload.get("public_project_context") or []
+        ),
         catalog_sha256=_canonical_hash(payload),
     )
 
@@ -188,11 +226,16 @@ def _candidate(defect: Mapping[str, Any], catalog: MaintenanceCatalog) -> dict[s
     metrics = defect.get("metrics") if isinstance(defect.get("metrics"), Mapping) else {}
     measured_area = max(0.0, float(metrics.get("area_m2", 0.0)))
     billable_area = max(measured_area, float(method["minimum_quantity"]))
-    area_cost = billable_area * float(method["area_krw_per_unit"])
+    area_rate = method.get("area_krw_per_unit")
+    area_cost = billable_area * float(area_rate) if area_rate is not None else None
     measured_volume = max(0.0, float(metrics.get("volume_m3", 0.0)))
     volume_rate = method.get("secondary_volume_krw_per_m3")
     volume_cost = measured_volume * float(volume_rate) if volume_rate is not None else None
-    priced_cost = max(area_cost, volume_cost or 0.0) if volume_cost is not None else area_cost
+    priced_cost = (
+        max(area_cost or 0.0, volume_cost or 0.0)
+        if area_cost is not None or volume_cost is not None
+        else None
+    )
     severity = str(defect.get("severity", "low")).lower()
     severity_weight = _SEVERITY_WEIGHT.get(severity, 1.0)
     depth = max(
@@ -211,8 +254,13 @@ def _candidate(defect: Mapping[str, Any], catalog: MaintenanceCatalog) -> dict[s
         "minimum_quantity_m2": float(method["minimum_quantity"]),
         "minimum_quantity_status": method["minimum_quantity_status"],
         "measured_volume_m3": measured_volume if defect_type == "pothole" else None,
-        "priced_cost_krw": round(priced_cost),
+        "priced_cost_krw": None if priced_cost is None else round(priced_cost),
         "full_cost_krw": None,
+        "pricing_status": method.get(
+            "pricing_status", "experimental_planning_rate"
+        ),
+        "source_item_codes": list(method.get("source_item_codes") or []),
+        "included_components": list(method.get("included_components") or []),
         "priority_proxy": round(priority, 6),
         "priority_status": "experimental_risk_screening_proxy",
     }
@@ -229,9 +277,13 @@ def _screen_budget(
     )
     selected: list[dict[str, Any]] = []
     deferred: list[dict[str, Any]] = []
+    unpriced: list[dict[str, Any]] = []
     direct = 0.0
     limit = None if budget_krw is None else _finite_nonnegative(budget_krw, "budget_krw")
     for item in ordered:
+        if item["priced_cost_krw"] is None:
+            unpriced.append(dict(item))
+            continue
         candidate_cost = float(item["priced_cost_krw"])
         projected = direct + candidate_cost + catalog.mobilization_krw
         if limit is None or projected <= limit:
@@ -247,8 +299,10 @@ def _screen_budget(
         "method": "deterministic_greedy_risk_screening_not_optimization",
         "selected_count": len(selected),
         "deferred_count": len(deferred),
+        "unpriced_candidate_count": len(unpriced),
         "selected_defect_ids": [item["defect_id"] for item in selected],
         "deferred_defect_ids": [item["defect_id"] for item in deferred],
+        "unpriced_defect_ids": [item["defect_id"] for item in unpriced],
         "priced_direct_cost_krw": round(direct),
         "priced_mobilization_krw": round(mobilization),
         "priced_total_krw": priced_total,
@@ -291,6 +345,36 @@ def calculate_maintenance_scenario_v2(
         100.0,
         current_score + max(0.0, 100.0 - current_score) * 0.90 * treatment_fraction,
     )
+    budget_report = {
+        "title": "2026 도로 보수 예산 검토 자료",
+        "status": "planning_reference_not_engineer_estimate_or_supplier_quote",
+        "price_date": catalog.effective_date,
+        "currency": catalog.currency,
+        "amount_range_krw": {
+            "priced_known_components_lower_bound": primary["priced_total_krw"],
+            "full_project_estimate": None,
+            "upper_bound": None,
+            "reason_upper_bound_na": "site-specific unpriced components remain",
+        },
+        "selected_work_count": primary["selected_count"],
+        "unpriced_candidate_count": primary["unpriced_candidate_count"],
+        "unpriced_components": primary["unpriced_components"],
+        "official_references": copy.deepcopy(catalog.references),
+        "public_project_context": copy.deepcopy(catalog.public_project_context),
+        "procurement_checklist": [
+            "현장조사로 실제 포장 종류·층 두께·보수 경계 확정",
+            "아스콘·유제 등 재료비와 운반 거리 견적",
+            "절단·적재·운반·폐기물 처리 물량 산출",
+            "차로 통제 방식·주야간·공휴일 조건 산정",
+            "장비 이동, 안전관리, 보험·간접비·이윤·부가세 반영",
+            "발주기관 설계내역서와 최신 적용 기준으로 재검토",
+        ],
+        "interpretation": (
+            "The displayed amount is only the subtotal of explicitly priced reference "
+            "components. G2B mixed-scope totals are context and are never divided into a "
+            "per-defect unit rate."
+        ),
+    }
     return {
         "format_version": 2,
         "catalog": catalog.contract(),
@@ -298,6 +382,7 @@ def calculate_maintenance_scenario_v2(
         "recommendations": candidates,
         "budget_screening": primary,
         "scenario_comparison": comparisons,
+        "budget_report": budget_report,
         "score_projection": {
             "current_internal_geometry_score": current_score,
             "post_treatment_internal_score_planning_estimate": planning_score,
@@ -312,8 +397,14 @@ def calculate_maintenance_scenario_v2(
             "note": "Repeated, spatially aligned surveys were not provided.",
         },
         "limitations": [
-            "Unit prices and minimum work quantities are experimental planning examples.",
-            "Traffic control, equipment relocation, and waste disposal costs are N/A.",
+            (
+                "The catalog uses an experimental assembly of official reference items; "
+                "it is not a supplier quote or final engineer estimate."
+                if catalog.approval_status
+                == "official_reference_experimental_assembly"
+                else "Unit prices and minimum work quantities are experimental planning examples."
+            ),
+            "Only explicitly listed components are priced; every unpriced component remains N/A.",
             "Budget selection is deterministic risk screening, not mathematical optimization.",
         ],
     }

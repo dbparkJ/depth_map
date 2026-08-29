@@ -32,7 +32,9 @@ def test_health_and_synthetic_job(tmp_path) -> None:
         assert crack["neural_inference_state"] == "not_configured"
         assert crack["geometry_api_contains_pytorch"] is False
         maintenance_v2 = capabilities["maintenance_scenario_v2"]
-        assert maintenance_v2["default_catalog"]["approval_status"] == "experimental"
+        assert maintenance_v2["default_catalog"]["approval_status"] == (
+            "official_reference_experimental_assembly"
+        )
         assert maintenance_v2["deterioration_rate"] == "N/A_no_repeated_survey"
 
         response = client.post(
@@ -131,10 +133,14 @@ def test_health_and_synthetic_job(tmp_path) -> None:
         )
         assert scenario_v2.status_code == 200
         scenario_v2_payload = scenario_v2.json()
-        assert scenario_v2_payload["catalog"]["catalog_version"] == "1.0.0"
+        assert scenario_v2_payload["catalog"]["catalog_version"] == "2026.2.0"
         assert scenario_v2_payload["budget_screening"]["priced_total_krw"] <= 600000
         assert scenario_v2_payload["budget_screening"]["full_total_krw"] is None
         assert scenario_v2_payload["deterioration"]["annual_rate"] is None
+        assert scenario_v2_payload["budget_report"]["price_date"] == "2026-05-08"
+        assert scenario_v2_payload["budget_report"]["amount_range_krw"][
+            "full_project_estimate"
+        ] is None
 
 
 def test_mapping_path_must_be_relative(tmp_path) -> None:

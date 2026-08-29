@@ -1,0 +1,113 @@
+catalog_id: kr-molit-2026h2-reference
+version: 2026.2.0
+source_document: MOLIT announcement 2026-652 and 2026 standard estimating references
+effective_date: "2026-05-08"
+approval_status: official_reference_experimental_assembly
+currency: KRW
+price_basis: priced_known_components_only_excludes_materials_logistics_traffic_indirects_and_vat
+goal: risk_screening_priority
+methods:
+  pothole_patch:
+    applies_to: pothole
+    label: 포트홀 표층 소규모 보수 — 공식 기준 중 계산 가능한 공종만
+    quantity_unit: m2
+    minimum_quantity: 0.0
+    minimum_quantity_status: no_procurement_minimum_applied
+    area_krw_per_unit: 8758
+    secondary_volume_krw_per_m3: null
+    pricing_rule: max_area_or_volume
+    pricing_status: partial_official_component_subtotal_not_full_cost
+    source_item_codes:
+      - DC221.10000
+      - LC211.00000
+      - LC401.00750
+    included_components:
+      - asphalt_breaking_5cm_planning_assumption_696_krw_per_m2
+      - manual_tack_coating_labor_equipment_only_102_krw_per_m2
+      - small_surface_laying_compaction_labor_equipment_only_7960_krw_per_m2
+  rut_overlay:
+    applies_to: rutting
+    label: 러팅 소규모 표층 덧씌우기 — 공식 기준 중 계산 가능한 공종만
+    quantity_unit: m2
+    minimum_quantity: 0.0
+    minimum_quantity_status: no_procurement_minimum_applied
+    area_krw_per_unit: 8062
+    secondary_volume_krw_per_m3: null
+    pricing_rule: area
+    pricing_status: partial_official_component_subtotal_not_full_cost
+    source_item_codes:
+      - LC211.00000
+      - LC401.00750
+    included_components:
+      - manual_tack_coating_labor_equipment_only_102_krw_per_m2
+      - small_surface_laying_compaction_labor_equipment_only_7960_krw_per_m2
+  bump_grinding:
+    applies_to: bump
+    label: 융기부 절삭·연삭 — 선택한 2026 공식 공종만으로 산출 불가
+    quantity_unit: m2
+    minimum_quantity: 0.0
+    minimum_quantity_status: no_procurement_minimum_applied
+    area_krw_per_unit: null
+    secondary_volume_krw_per_m3: null
+    pricing_rule: area
+    pricing_status: not_priced_by_selected_official_items
+    source_item_codes: []
+    included_components: []
+mobilization:
+  krw_per_scenario: 0
+  status: not_priced_zero_is_not_a_quote
+unpriced_components:
+  traffic_control: null
+  equipment_relocation: null
+  waste_disposal: null
+  asphalt_mixture_material: null
+  tack_coat_material: null
+  pavement_cutting_and_edge_preparation: null
+  loading_and_transport: null
+  site_investigation_and_design: null
+  overhead_profit_insurance_and_vat: null
+recommendation_rules:
+  version: risk-screening-v1
+  status: experimental
+  supported_defect_types:
+    - pothole
+    - rutting
+    - bump
+deterioration:
+  annual_rate: null
+  status: N/A_no_repeated_survey
+references:
+  - reference_id: molit-market-cost-2026h2
+    publisher: 국토교통부·한국건설기술연구원
+    title: 2026년 하반기 건설공사 표준시장단가 적용공종 및 단가
+    announcement: 국토교통부 공고 제2026-652호
+    url: https://www.codil.or.kr/helpdesk/read.do?bbsId=BBSMSTR_900000000204&nttId=13281
+    checked_items:
+      - DC221.10000 아스팔트포장 깨기 13,927원/m3
+      - DC221.20000 포장절단/아스팔트 2,617원/m
+      - LC211.00000 텍코팅 인력식 102원/m2
+      - LC401.00750 아스콘 표층·중간층 소규모포설 7,960원/m2
+    exclusion_note: 재료비, 장비 운반, 철거재 적재·운반·폐기 등은 항목별 정의에 따라 제외
+  - reference_id: molit-standard-production-2026
+    publisher: 국토교통부·한국건설기술연구원
+    title: 2026년 건설공사 표준품셈
+    url: https://www.codil.or.kr/helpdesk/read.do?bbsId=BBSMSTR_900000000202&nttId=13261
+    checked_items:
+      - 소파보수 표층 A/B/C-Type 일당 시공량 400/140/50m2
+      - 교통통제·안전처리 인력과 시설은 현장조건에 따라 별도 계상
+public_project_context:
+  - reference_id: g2b-hwaseong-2026-maintenance-zone3
+    title: 2026년 화성시 국지도 및 지방도 상시보수공사 단가계약 3구역
+    bid_notice_no: R26BK01312803
+    amount_krw_vat_included: 199961000
+    duration_days: 300
+    scope_note: 포트홀·시선유도·차량방호·배수시설 등 24시간 상시보수 혼합 총액
+    unit_rate_use: prohibited_mixed_scope_total
+    url: https://www.g2b.go.kr/pn/pnp/pnpe/UntyAtchFile/downloadFile.do?bidPbancNo=R26BK01312803&bidPbancOrd=000&fileSeq=1&fileType=&prcmBsneSeCd=07
+  - reference_id: g2b-seoul-beltway-concrete-2026
+    title: 수도권제1순환(일산~퇴계원간)고속도로 2026년 콘크리트 포장 보수 공사
+    bid_notice_no: R26BK01431964
+    amount_krw_vat_included: 2113870000
+    scope_note: 부분단면 1,938m2·전단면 698m2·교통관리 1식 등 혼합 총액
+    unit_rate_use: prohibited_mixed_scope_total
+    url: https://www.g2b.go.kr/pn/pnp/pnpe/UntyAtchFile/downloadFile.do?bidPbancNo=R26BK01431964&bidPbancOrd=000&fileSeq=2&fileType=&prcmBsneSeCd=07

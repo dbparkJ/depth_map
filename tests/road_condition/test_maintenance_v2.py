@@ -96,3 +96,49 @@ def test_empty_include_types_selects_no_work() -> None:
     )
     assert result["recommendations"] == []
     assert result["budget_screening"]["priced_total_krw"] == 0
+
+
+def test_2026_official_reference_catalog_prices_only_known_components() -> None:
+    catalog = load_maintenance_catalog(CATALOG_ROOT, "kr-molit-2026h2-reference")
+    assert catalog.version == "2026.2.0"
+    assert catalog.approval_status == "official_reference_experimental_assembly"
+    assert len(catalog.references) == 2
+    assert all(
+        item["unit_rate_use"] == "prohibited_mixed_scope_total"
+        for item in catalog.public_project_context
+    )
+    result = calculate_maintenance_scenario_v2(
+        {"scores": {"geometry_score": 60.0}},
+        [
+            *_defects(),
+            {
+                "defect_id": "b-unpriced",
+                "defect_type": "bump",
+                "severity": "medium",
+                "metrics": {"area_m2": 0.3, "max_height_m": 0.06},
+            },
+        ],
+        catalog=catalog,
+    )
+    pothole = next(
+        item for item in result["recommendations"] if item["defect_id"] == "p-high"
+    )
+    assert pothole["priced_cost_krw"] == 876
+    assert pothole["full_cost_krw"] is None
+    assert pothole["source_item_codes"] == [
+        "DC221.10000",
+        "LC211.00000",
+        "LC401.00750",
+    ]
+    screening = result["budget_screening"]
+    assert screening["unpriced_candidate_count"] == 1
+    assert screening["unpriced_defect_ids"] == ["b-unpriced"]
+    assert "asphalt_mixture_material" in screening["unpriced_components"]
+    report = result["budget_report"]
+    assert report["price_date"] == "2026-05-08"
+    assert report["amount_range_krw"]["priced_known_components_lower_bound"] == (
+        screening["priced_total_krw"]
+    )
+    assert report["amount_range_krw"]["full_project_estimate"] is None
+    assert len(report["public_project_context"]) == 2
+    assert len(report["procurement_checklist"]) >= 5

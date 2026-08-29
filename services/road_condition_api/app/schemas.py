@@ -48,7 +48,7 @@ class ScenarioV2Request(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     catalog_id: str = Field(
-        default="internal-planning-v1",
+        default="kr-molit-2026h2-reference",
         pattern=r"^[a-z0-9][a-z0-9._-]{0,63}$",
     )
     include_types: list[Literal["pothole", "rutting", "bump"]] = Field(

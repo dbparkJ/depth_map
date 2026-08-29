@@ -59,6 +59,7 @@ class Settings:
     cors_origins: tuple[str, ...] = ("http://localhost:8080", "http://127.0.0.1:8080")
     scoring_profiles_root: Path = Path("scoring_profiles")
     maintenance_catalogs_root: Path = Path("maintenance_catalogs")
+    default_maintenance_catalog_id: str = "kr-molit-2026h2-reference"
     rimms_contract_ingress_enabled: bool = False
 
     @classmethod
@@ -81,6 +82,10 @@ class Settings:
             ),
             maintenance_catalogs_root=Path(
                 os.getenv("ROAD_CONDITION_MAINTENANCE_CATALOGS_ROOT", "maintenance_catalogs")
+            ),
+            default_maintenance_catalog_id=os.getenv(
+                "ROAD_CONDITION_DEFAULT_MAINTENANCE_CATALOG",
+                "kr-molit-2026h2-reference",
             ),
             rimms_contract_ingress_enabled=(
                 os.getenv("ROAD_CONDITION_RIMMS_CONTRACT_INGRESS_ENABLED", "false")
@@ -266,7 +271,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     )
     default_maintenance_catalog = load_maintenance_catalog(
         resolved_settings.maintenance_catalogs_root,
-        "internal-planning-v1",
+        resolved_settings.default_maintenance_catalog_id,
     )
     store = JobStore(resolved_settings.data_root)
     rimms_store = RimmsContractStore(resolved_settings.data_root)

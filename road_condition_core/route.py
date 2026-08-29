@@ -16,7 +16,12 @@ from .config import AnalysisConfig
 from .detectors import detect_rutting
 from .geometry import project_to_trajectory
 from .models import AnalysisProducts, Defect, SegmentMetric
-from .pipeline import _segment_metrics, analyze_points, write_analysis_products
+from .pipeline import (
+    ALGORITHM_VERSION,
+    _segment_metrics,
+    analyze_points,
+    write_analysis_products,
+)
 from .roi import RoadRoi
 
 
@@ -147,6 +152,7 @@ def _tile_signature(
                 np.ascontiguousarray(array).view(np.uint8)
             ).hexdigest()
     payload = {
+        "algorithm_version": ALGORITHM_VERSION,
         "point_count": int(len(points)),
         "point_bbox_min": np.min(points, axis=0).astype(float).tolist(),
         "point_bbox_max": np.max(points, axis=0).astype(float).tolist(),

@@ -19,6 +19,45 @@ class RutSeries:
     right_depth_m: np.ndarray
 
 
+def _remove_components_touching_exclusion(
+    candidate_mask: np.ndarray,
+    exclusion_mask: np.ndarray | None,
+) -> tuple[np.ndarray, int, int]:
+    """Remove cut-off positive components attached to a known non-road high cell."""
+
+    candidate = np.asarray(candidate_mask, dtype=bool)
+    if exclusion_mask is None or not np.any(exclusion_mask) or not np.any(candidate):
+        return candidate.copy(), 0, 0
+    structure = ndimage.generate_binary_structure(2, 2)
+    labels, _count = ndimage.label(candidate, structure=structure)
+    touching = np.unique(labels[ndimage.binary_dilation(exclusion_mask, structure=structure)])
+    touching = touching[touching > 0]
+    if not len(touching):
+        return candidate.copy(), 0, 0
+    removed = np.isin(labels, touching)
+    return candidate & ~removed, int(len(touching)), int(np.count_nonzero(removed))
+
+
+def bump_plausibility_boundary_guard_stats(
+    grid: SurfaceGrid,
+    config: DetectionConfig,
+) -> dict[str, int | bool]:
+    candidate = (
+        grid.valid_mask
+        & np.isfinite(grid.residual_m)
+        & (grid.residual_m >= config.bump_min_height_m)
+    )
+    _retained, components, cells = _remove_components_touching_exclusion(
+        candidate,
+        grid.plausibility_excluded_high_mask,
+    )
+    return {
+        "applied": grid.plausibility_excluded_high_mask is not None,
+        "removed_component_count": components,
+        "removed_candidate_cell_count": cells,
+    }
+
+
 def _severity_for_pothole(max_depth_m: float, area_m2: float) -> str:
     if max_depth_m >= 0.08 or area_m2 >= 1.0:
         return "high"
@@ -188,6 +227,10 @@ def detect_bumps(grid: SurfaceGrid, config: DetectionConfig) -> list[Defect]:
         grid.valid_mask
         & np.isfinite(grid.residual_m)
         & (grid.residual_m >= config.bump_min_height_m)
+    )
+    candidate, _removed_components, _removed_cells = _remove_components_touching_exclusion(
+        candidate,
+        grid.plausibility_excluded_high_mask,
     )
     return _component_defects(
         grid,

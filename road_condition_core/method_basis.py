@@ -6,7 +6,7 @@ from typing import Any
 
 _METHOD_BASIS: dict[str, Any] = {
     "profile_id": "road-geometry-evidence-v1",
-    "profile_version": "1.0.0",
+    "profile_version": "1.1.0",
     "evidence_status": "research_supported_workflow_not_sensor_validated",
     "standard_naming_allowed": False,
     "threshold_policy": {
@@ -41,7 +41,10 @@ _METHOD_BASIS: dict[str, Any] = {
         {
             "rule_id": "separate-negative-and-positive-displacement",
             "implementation_state": "applied",
-            "implementation": "pothole and bump candidates are segmented separately",
+            "implementation": (
+                "pothole and bump candidates are segmented separately; positive "
+                "components attached to excluded high non-road cells are suppressed"
+            ),
             "source_ids": ["de-blasiis-2020"],
         },
         {

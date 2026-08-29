@@ -66,7 +66,9 @@ def test_defect_merge_is_order_independent_and_keeps_nearby_independent_defect()
     assert merged["merged_from"] == ["chunk-a", "chunk-b"]
 
 
-def test_boundary_pothole_has_one_owner_and_resume_skips_tiles(tmp_path) -> None:
+def test_boundary_pothole_has_one_owner_and_resume_skips_tiles(
+    tmp_path, monkeypatch
+) -> None:
     scene = generate_synthetic_scene(
         "flat",
         length_m=20.0,
@@ -117,6 +119,18 @@ def test_boundary_pothole_has_one_owner_and_resume_skips_tiles(tmp_path) -> None
     )
     assert second["run_stats"]["skipped_completed_tile_count"] == 2
     assert second["defect_count"] == 1
+
+    monkeypatch.setattr("road_condition_core.route.ALGORITHM_VERSION", "test-next-version")
+    third = run_tiled_analysis(
+        points,
+        scene.colors_rgb,
+        scene.trajectory_enu_m,
+        output,
+        analysis_config=config,
+        source={"type": "synthetic", "profile": "boundary"},
+    )
+    assert third["run_stats"]["executed_completed_tile_count"] == 2
+    assert third["run_stats"]["skipped_completed_tile_count"] == 0
 
     merged = aggregate_chunk_routes(
         [

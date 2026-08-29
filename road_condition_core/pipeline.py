@@ -18,6 +18,7 @@ from .advanced_geometry import (
 from .config import AnalysisConfig
 from .detectors import (
     RutSeries,
+    bump_plausibility_boundary_guard_stats,
     detect_bumps,
     detect_potholes,
     detect_rutting,
@@ -31,7 +32,7 @@ from .report_v2 import generate_report_bundle
 from .roi import ZONE_TYPE_CODES, RoadRoi, classify_st
 
 
-ALGORITHM_VERSION = "road-condition-geometry-mvp-3"
+ALGORITHM_VERSION = "road-condition-geometry-mvp-4"
 DEFAULT_SCORING_PROFILE_CONTRACT = {
     "profile_id": "internal-geometry-mvp-v1",
     "profile_version": "1.0.0",
@@ -528,6 +529,9 @@ def analyze_points(
             }
         )
     potholes = detect_potholes(grid, resolved_config.detection)
+    bump_boundary_guard = bump_plausibility_boundary_guard_stats(
+        grid, resolved_config.detection
+    )
     bumps = detect_bumps(grid, resolved_config.detection)
     ruts, rut_series = detect_rutting(grid, resolved_config.detection)
     advanced_defects: list[Defect] = []
@@ -675,6 +679,15 @@ def analyze_points(
             "plausibility_excluded_cell_count": excluded_cells,
             "plausibility_excluded_low_cell_count": excluded_low_cells,
             "plausibility_excluded_high_cell_count": excluded_high_cells,
+            "bump_plausibility_boundary_guard_applied": bool(
+                bump_boundary_guard["applied"]
+            ),
+            "bump_plausibility_boundary_guard_removed_component_count": int(
+                bump_boundary_guard["removed_component_count"]
+            ),
+            "bump_plausibility_boundary_guard_removed_candidate_cell_count": int(
+                bump_boundary_guard["removed_candidate_cell_count"]
+            ),
             "total_surface_cell_count": total_cells,
             "median_points_per_valid_cell": float(
                 np.median(grid.point_count[grid.valid_mask])

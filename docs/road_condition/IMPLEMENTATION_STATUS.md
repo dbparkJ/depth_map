@@ -106,7 +106,7 @@
 - [ ] 실측 포트홀 깊이·면적·체적 비교
 - [ ] 실측 좌우 러팅 비교
 - [x] noise-scaled experimental threshold recommendation report
-- [ ] stage timing과 peak RSS diagnostics
+- [~] 26개 청크 audit timing/peak RSS 측정; 일반 job stage별 운영 metric은 미구현
 
 Stage 03 코드 계약과 합성 검증은 완료했지만 장치/장착값, 평탄 실데이터, 포트홀·러팅
 ground truth가 아직 `unknown`이다. 따라서 실험 threshold는 자동 승인하지 않으며 Stage 03
@@ -124,6 +124,7 @@ ground truth가 아직 `unknown`이다. 따라서 실험 threshold는 자동 승
 - [x] tile partition과 route defect/segment Parquet + defect GeoJSON
 - [x] input signature resume와 partial failure
 - [~] 한 mapping chunk씩 streaming; PLY 자체의 spatial streaming loader는 후속 최적화
+- [x] 26개 청크의 q25/q50/q75 또는 짧은 중앙 구간 균등 감사와 고립 프로세스 메모리 회수
 
 ### P1: 추가 형상 분석
 

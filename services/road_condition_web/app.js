@@ -371,7 +371,7 @@
     state.vworld.selectedDefectId = null;
     $("emptyState").hidden = true;
     $("resultView").hidden = false;
-    $("scenarioButton").disabled = true;
+    $("scenarioButton").disabled = false;
     $("reportLink").classList.add("disabled");
     $("reportLink").href = "#";
     $("loadedTileLabel").textContent = `${index + 1}/${state.routeTiles.length} · ${tile.tileId}`;
@@ -385,6 +385,7 @@
     renderSegmentTable();
     renderCurrentView();
     renderDefectDetail();
+    await calculateScenario();
     setApiStatus("Route tile 완료", "ok");
   }
 
@@ -1175,20 +1176,32 @@
   }
 
   async function calculateScenario() {
-    if (!state.jobId) return;
     try {
       const budget = number($("maintenanceBudget").value, 5000000);
-      const result = await api(`/api/v1/jobs/${state.jobId}/scenarios/v2`, {
-        method: "POST",
-        body: JSON.stringify({
-          include_types: ["pothole", "rutting", "bump"],
-          budget_krw: budget,
-          comparison_budgets_krw: [Math.round(budget * 0.5), Math.round(budget * 1.5)],
-          goal: "risk_screening_priority"
-        })
-      });
+      let result;
+      if (state.sourceMode === "route") {
+        const tile = state.routeTiles[state.routeTileIndex];
+        if (!tile) return;
+        result = await api(`/api/v1/route-datasets/budget-report?${query({
+          path: tile.path,
+          tile_id: tile.tileId,
+          budget_krw: budget
+        })}`);
+      } else {
+        if (!state.jobId) return;
+        result = await api(`/api/v1/jobs/${state.jobId}/scenarios/v2`, {
+          method: "POST",
+          body: JSON.stringify({
+            include_types: ["pothole", "rutting", "bump"],
+            budget_krw: budget,
+            comparison_budgets_krw: [Math.round(budget * 0.5), Math.round(budget * 1.5)],
+            goal: "risk_screening_priority"
+          })
+        });
+      }
       const screening = result.budget_screening;
-      $("scenarioResult").innerHTML = `<span>알려진 비용 합계</span><strong>${number(screening.priced_total_krw).toLocaleString("ko-KR")}원</strong><p>선정 ${screening.selected_count}건 · 보류 ${screening.deferred_count}건</p><p>현재 ${format(result.score_projection.current_internal_geometry_score, 1)}점 → planning estimate ${format(result.score_projection.post_treatment_internal_score_planning_estimate, 1)}점</p><p class="muted">전체 비용 N/A · 열화율 N/A · 결정적 위험 screening이며 최적화/실제 예측이 아닙니다.</p>`;
+      const report = result.budget_report || {};
+      $("scenarioResult").innerHTML = `<span>계산 가능한 공식 공종 부분합 하한</span><strong>${number(screening.priced_total_krw).toLocaleString("ko-KR")}원</strong><p>예산 내 계산 가능 후보 ${screening.selected_count}건 · 예산 보류 ${screening.deferred_count}건 · 단가 미산정 ${screening.unpriced_candidate_count}건</p><p>내부 형상 참고값 ${format(result.score_projection.current_internal_geometry_score, 1)} → 보수 가정 참고값 ${format(result.score_projection.post_treatment_internal_score_planning_estimate, 1)}</p><p class="muted">전체 비용 N/A · 재료·운반·폐기·교통통제·간접비·부가세 별도 · 기준 ${report.price_date || "N/A"}</p>`;
     } catch (error) {
       $("scenarioResult").textContent = error.message;
     }

@@ -43,8 +43,21 @@ def test_route_view_reads_only_selected_completed_tile(tmp_path) -> None:
         },
     )
     result = route / "tiles" / "tile-000000" / "result"
-    _write_json(result / "summary.json", {"format_version": 1, "tile": "zero"})
-    _write_json(result / "defects.json", [{"defect_id": "pothole-0001"}])
+    _write_json(
+        result / "summary.json",
+        {"format_version": 1, "tile": "zero", "scores": {"geometry_score": 80.0}},
+    )
+    _write_json(
+        result / "defects.json",
+        [
+            {
+                "defect_id": "pothole-0001",
+                "defect_type": "pothole",
+                "severity": "high",
+                "metrics": {"area_m2": 0.1, "volume_m3": 0.004, "max_depth_m": 0.08},
+            }
+        ],
+    )
     evidence_path = route / "evidence" / "tiles" / "tile-000000.rcev"
     evidence_report = write_evidence_tile(
         evidence_path,
@@ -128,6 +141,21 @@ def test_route_view_reads_only_selected_completed_tile(tmp_path) -> None:
             "application/vnd.road-condition.rcev"
         )
         assert evidence.content[:4] == b"RCEV"
+        budget = client.get(
+            "/api/v1/route-datasets/budget-report",
+            params={
+                "path": "route-a",
+                "tile_id": "tile-000000",
+                "budget_krw": 1_000_000,
+            },
+        )
+        assert budget.status_code == 200
+        budget_payload = budget.json()
+        assert budget_payload["catalog"]["catalog_version"] == "2026.2.0"
+        assert budget_payload["budget_screening"]["priced_total_krw"] == 876
+        assert budget_payload["budget_report"]["amount_range_krw"][
+            "full_project_estimate"
+        ] is None
 
 
 def test_route_view_rejects_workspace_escape_and_artifact_traversal(tmp_path) -> None:

@@ -48,6 +48,7 @@ def test_web_viewer_has_progressive_route_and_accessibility_contract() -> None:
     assert "expected_version" in script
     assert "raw prediction 보존" in script
     assert "/scenarios/v2" in script
+    assert "route-datasets/budget-report" in script
     assert "전체 비용 N/A" in script
     assert "자동 판정 보류" in script
     assert "verticalDistance" in script

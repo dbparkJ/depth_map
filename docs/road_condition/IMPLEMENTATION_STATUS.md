@@ -91,7 +91,7 @@
 - [~] position spread는 raw metadata가 있을 때 사용하지만 full provenance 활용 전이다.
 - [~] ENU GeoJSON은 local ENU이며 위경도 GeoJSON 변환 전이다.
 - [~] legacy 유지보수 score recovery와 강우 계산은 planning/screening proxy다.
-- [~] v2 공법/단가 catalog와 예산 우선순위는 구현했으나 실제 단가·반복 조사 보정 전이다.
+- [~] 2026 공식 공종 부분합 catalog와 job/route 예산 검토 API 구현; 전체 견적·반복 조사 보정 전
 - [~] HTML/CSV/PDF와 geometry evidence는 구현했으나 실제 결함별 RGB frame 연결 전이다.
 - [~] worker는 파일 기반 단일 host 구조이며 crash recovery queue 전이다.
 

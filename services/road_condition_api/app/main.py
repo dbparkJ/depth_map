@@ -401,6 +401,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 "unpriced_components": sorted(
                     default_maintenance_catalog.unpriced_components
                 ),
+                "route_budget_report": "read_only_get_for_one_selected_tile",
             },
             "roadinventory_mms_integration": {
                 "request_contract_version": RIMMS_REQUEST_CONTRACT_VERSION,
@@ -608,6 +609,45 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             )
         except FileNotFoundError as exc:
             raise HTTPException(status_code=404, detail="route evidence not found") from exc
+        except (ValueError, json.JSONDecodeError) as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    @app.get("/api/v1/route-datasets/budget-report")
+    def get_route_budget_report(
+        request: Request,
+        path: str = Query(min_length=1, max_length=1024),
+        tile_id: str = Query(min_length=1, max_length=64),
+        budget_krw: float = Query(default=5_000_000, ge=0, le=1_000_000_000_000),
+    ) -> dict[str, Any]:
+        try:
+            summary = read_route_tile_artifact(
+                request.app.state.settings.workspace_root,
+                path,
+                tile_id,
+                "summary",
+            )
+            defects = read_route_tile_artifact(
+                request.app.state.settings.workspace_root,
+                path,
+                tile_id,
+                "defects",
+            )
+            catalog = load_maintenance_catalog(
+                request.app.state.settings.maintenance_catalogs_root,
+                request.app.state.settings.default_maintenance_catalog_id,
+            )
+            return calculate_maintenance_scenario_v2(
+                summary,
+                defects,
+                catalog=catalog,
+                include_types={"pothole", "rutting", "bump"},
+                budget_krw=budget_krw,
+                comparison_budgets_krw=(budget_krw * 0.5, budget_krw * 1.5),
+            )
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=404, detail="route tile or catalog not found") from exc
+        except RuntimeError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
         except (ValueError, json.JSONDecodeError) as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
 

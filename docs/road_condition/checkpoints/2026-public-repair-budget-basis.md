@@ -66,6 +66,9 @@
 
 - catalog: `maintenance_catalogs/kr-molit-2026h2-reference.yaml`
 - 기본 API catalog를 위 2026 reference catalog로 변경했다.
+- 완료된 route의 선택 tile은 read-only
+  `GET /api/v1/route-datasets/budget-report`로 같은 catalog와 후보를 계산한다. 따라서 POST가
+  차단된 외부 공개 화면에서도 예산 검토 자료를 조회할 수 있다.
 - 결과는 다음을 분리한다.
   - `priced_known_components_lower_bound`: 공식 항목 중 계산 가능한 부분 합계
   - `full_project_estimate`: `N/A`
@@ -74,6 +77,8 @@
   - `procurement_checklist`: 발주 전 현장 산출 항목
 - 융기부처럼 선택한 공식 공종으로 가격을 만들 수 없는 후보는 0원으로 가장하지 않고
   `unpriced_candidate`로 분리한다.
+- 웹은 route tile을 열 때 계산 가능한 공종 부분합 하한, 예산 내 후보, 보류 후보,
+  단가 미산정 후보와 전체 비용 N/A 사유를 자동 표시한다.
 
 ## 출처
 

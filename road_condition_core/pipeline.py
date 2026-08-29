@@ -25,12 +25,13 @@ from .detectors import (
 )
 from .geometry import project_to_trajectory, rasterize_road_surface, track_to_enu_xy
 from .models import AnalysisProducts, Defect, SegmentMetric, SurfaceGrid
+from .method_basis import method_basis_contract
 from .report import render_html_report
 from .report_v2 import generate_report_bundle
 from .roi import ZONE_TYPE_CODES, RoadRoi, classify_st
 
 
-ALGORITHM_VERSION = "road-condition-geometry-mvp-2"
+ALGORITHM_VERSION = "road-condition-geometry-mvp-3"
 DEFAULT_SCORING_PROFILE_CONTRACT = {
     "profile_id": "internal-geometry-mvp-v1",
     "profile_version": "1.0.0",
@@ -744,6 +745,7 @@ def analyze_points(
             "score_profile": "internal_geometry_mvp_v1",
         },
         "scoring_profile": profile_contract,
+        "method_basis": method_basis_contract(),
         "limitations": [
             "This MVP analyzes geometry only; crack, patching, raveling, and bleeding require an RGB model.",
             "The roughness value is a project-specific proxy and must not be reported as standardized IRI.",

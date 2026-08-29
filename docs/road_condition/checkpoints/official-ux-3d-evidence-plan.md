@@ -82,6 +82,23 @@ record
 
 ## 단계와 체크포인트
 
+### Checkpoint R — 국내외 연구 근거 추적
+
+- 국내 학술 논문·정부 연구보고서와 해외 학술 논문·공공 매뉴얼을 구분해 기록한다.
+- 현재 구현에 적용한 근거, 센서 차이 때문에 적용하지 않은 임계값, 향후 RGB 범위를 분리한다.
+- 모든 분석 `summary.json`에 버전이 있는 `method_basis`를 남긴다.
+- 논문 성능 수치를 현재 데이터의 정확도로 전용하지 않는다.
+- commit: `feat(road-condition-core): checkpoint/road-condition-method-evidence`
+
+### Checkpoint BUD — 2026 공공공사 예산 근거
+
+- 국토교통부 2026년 하반기 표준시장단가와 표준품셈, 2026년 나라장터 유지보수 공고를
+  원문 기준으로 기록한다.
+- 공식 단가에 포함된 직접 공종과 재료·폐기물·교통통제·장비 운반 등 제외 항목을 분리한다.
+- 나라장터 총액을 결함 면적 단가로 나누어 사용하지 않는다.
+- 화면은 확정 견적이 아니라 `예산 검토용 범위`와 `별도 견적 필요` 항목을 보여준다.
+- commit: `feat(road-condition-core): checkpoint/road-condition-2026-budget-basis`
+
 ### Checkpoint A — 경량 3D evidence 계약
 
 - `RCEV v1` writer/reader/validator

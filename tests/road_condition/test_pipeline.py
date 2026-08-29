@@ -33,6 +33,23 @@ def test_mixed_scene_detects_geometry_defects() -> None:
     assert results["bump_count"] >= 1
     assert products.summary["coverage"]["valid_coverage_ratio"] >= 0.95
     assert products.summary["scores"]["geometry_score"] < 100.0
+    basis = products.summary["method_basis"]
+    assert basis["profile_id"] == "road-geometry-evidence-v1"
+    assert basis["standard_naming_allowed"] is False
+    assert {item["region"] for item in basis["sources"]} == {
+        "domestic",
+        "international",
+    }
+    assert all(item.get("url", "").startswith("https://") for item in basis["sources"])
+
+
+def test_method_basis_contract_is_mutation_safe() -> None:
+    from road_condition_core.method_basis import method_basis_contract
+
+    left = method_basis_contract()
+    left["sources"][0]["title"] = "changed"
+    right = method_basis_contract()
+    assert right["sources"][0]["title"] != "changed"
 
 
 def test_flat_scene_has_no_threshold_exceeding_defect() -> None:

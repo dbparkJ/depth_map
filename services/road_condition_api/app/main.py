@@ -42,7 +42,12 @@ from .schemas import (
     ScenarioRequest,
     ScenarioV2Request,
 )
-from .route_view import read_route_manifest, read_route_tile_artifact
+from .route_view import (
+    read_route_evidence_manifest,
+    read_route_manifest,
+    read_route_tile_artifact,
+    resolve_route_evidence_tile,
+)
 from .store import JobStore
 
 
@@ -583,6 +588,47 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             raise HTTPException(status_code=404, detail="route tile not found") from exc
         except RuntimeError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except (ValueError, json.JSONDecodeError) as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    @app.get("/api/v1/route-datasets/evidence/manifest")
+    def get_route_evidence_manifest(
+        request: Request,
+        path: str = Query(min_length=1, max_length=1024),
+    ) -> dict[str, Any]:
+        try:
+            return read_route_evidence_manifest(
+                request.app.state.settings.workspace_root,
+                path,
+            )
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=404, detail="route evidence not found") from exc
+        except (ValueError, json.JSONDecodeError) as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    @app.get("/api/v1/route-datasets/evidence/tile")
+    def get_route_evidence_tile(
+        request: Request,
+        path: str = Query(min_length=1, max_length=1024),
+        tile_id: str = Query(min_length=1, max_length=64),
+    ) -> FileResponse:
+        try:
+            resolved, metadata = resolve_route_evidence_tile(
+                request.app.state.settings.workspace_root,
+                path,
+                tile_id,
+            )
+            return FileResponse(
+                resolved,
+                media_type="application/vnd.road-condition.rcev",
+                headers={
+                    "Cache-Control": "private, max-age=3600, immutable",
+                    "ETag": f'"{metadata.get("sha256", "")}"',
+                    "X-Content-Type-Options": "nosniff",
+                },
+            )
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=404, detail="route evidence tile not found") from exc
         except (ValueError, json.JSONDecodeError) as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
 
